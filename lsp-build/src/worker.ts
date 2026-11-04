@@ -14,7 +14,9 @@ import type {
   AttachInput, AttachOutput, CompletionOutput, DefinitionOutput, DiagnosticsOutput, DocInput, HoverOutput, Loc, PosInput
 } from './protocol'
 
-const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', 'env', 'dist', '.orca', '.mypy_cache', '.pytest_cache', 'site-packages', '.cache', '.qtc_clangd'])
+const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', 'env', 'dist', '.orca', '.mypy_cache', '.pytest_cache', 'site-packages', '.cache', '.qtc_clangd',
+  // workspace la thu muc home (vd. /Users/<ten>): bo qua thu muc he thong/media lon
+  'Library', 'Applications', 'AppData', 'Movies', 'Music', 'Pictures', 'Downloads', '$Recycle.Bin'])
 const sha = (s: string) => createHash('sha1').update(s.replace(/\r\n/g, '\n')).digest('hex')
 const WIN = process.platform === 'win32'
 
@@ -63,35 +65,46 @@ export default function activate(orca: OrcaWorkerApi): void {
    *  Du an lon (a large project: 10k thu muc, 8.7k file nguon, 127 MB) bam het mat ~11 s/workspace va vuot gioi han so file;
    *  nen chi bam nhung file cung kich thuoc voi file dang mo (thuong 1-3 file).
    *  Thu muc build sinh ra bi bo qua khi quet. */
-  const MAX_FILES = 60000
-  function indexFor(root: string): Map<string, string[]> {
+  const MAX_FILES = 200000
+  const skipDir = (n: string) => SKIP.has(n) || n.startsWith('.') || /^(build|out|cmake-build-)/i.test(n)
+  /** Quet theo chieu rong (thu muc nong truoc): workspace co the la ca thu muc home.
+   *  `match` duoc goi cho tung file; tra ve true thi dung som (khong luu chi muc do chua day du). */
+  function scan(root: string, match?: (full: string, size: number) => boolean): string | null {
     const cached = hashIndex.get(root)
-    if (cached && Date.now() - cached.at < 300000) return cached.byHash
+    if (cached && Date.now() - cached.at < 300000) return null
     const bySize = new Map<string, string[]>()
     let count = 0
-    const walk = (dir: string, depth: number) => {
-      if (depth > 12 || count > MAX_FILES) return
-      let ents: import('node:fs').Dirent[] = []
-      try { ents = readdirSync(dir, { withFileTypes: true }) } catch { return }
-      for (const e of ents) {
-        const n = e.name
-        if (e.isDirectory()) {
-          if (!SKIP.has(n) && !n.startsWith('.') && !/^(build|out|cmake-build-)/i.test(n)) walk(join(dir, n), depth + 1)
-          continue
+    const stopAt = Date.now() + 30000
+    let level: string[] = [root]
+    for (let depth = 0; level.length && depth <= 14; depth++) {
+      const next: string[] = []
+      for (const dir of level) {
+        if (count > MAX_FILES || Date.now() > stopAt) return null
+        let ents: import('node:fs').Dirent[] = []
+        try { ents = readdirSync(dir, { withFileTypes: true }) } catch { continue }
+        for (const e of ents) {
+          const n = e.name
+          if (e.isDirectory()) { if (!skipDir(n)) next.push(join(dir, n)); continue }
+          if (!e.isFile() || !langOfPath(n)) continue
+          const full = join(dir, n)
+          let size: number
+          try { size = statSync(full).size } catch { continue }
+          count++
+          const k = `size:${size}`
+          const list = bySize.get(k)
+          if (list) list.push(full); else bySize.set(k, [full])
+          if (match?.(full, size)) return full
         }
-        if (!e.isFile() || !langOfPath(n)) continue
-        const full = join(dir, n)
-        let size: number
-        try { size = statSync(full).size } catch { continue }
-        count++
-        const k = `size:${size}`
-        const list = bySize.get(k)
-        if (list) list.push(full); else bySize.set(k, [full])
       }
+      level = next
     }
-    walk(root, 0)
     hashIndex.set(root, { at: Date.now(), byHash: bySize })
-    return bySize
+    return null
+  }
+  /** Chi muc theo kich thuoc file (chi stat, khong doc noi dung): "size:<bytes>" -> duong dan. */
+  function indexFor(root: string): Map<string, string[]> {
+    scan(root)
+    return hashIndex.get(root)?.byHash ?? new Map()
   }
   /** Bam noi dung co cache theo (duong dan, mtime, size). */
   const hashCache = new Map<string, { mtime: number; size: number; h: string }>()
@@ -290,10 +303,19 @@ export default function activate(orca: OrcaWorkerApi): void {
     const h = input.hash ?? sha(input.text ?? '')
     // Editor gui so byte UTF-8 (ban LF va ban CRLF): chi bam nhung file tren dia co dung kich thuoc do.
     const sizes = [input.size, input.sizeCrlf].filter((s): s is number => typeof s === 'number').flatMap((s) => [s, s + 3]) // +3: BOM UTF-8
+    const sizeSet = new Set(sizes)
+    const ok = (p: string) => langOfPath(p) === lang && fileHash(p) === h
     const find = (r: string): string[] => {
-      const idx = indexFor(r)
+      const cached = hashIndex.get(r)
+      if (!cached || Date.now() - cached.at >= 300000) {
+        // Chua co chi muc: quet va dung ngay khi gap file trung (khong phai doi quet het thu muc lon).
+        const hit = scan(r, (full, size) => (sizeSet.size ? sizeSet.has(size) : true) && ok(full))
+        if (hit) return [hit]
+      }
+      const idx = hashIndex.get(r)?.byHash
+      if (!idx) return []
       const cands = sizes.length ? sizes.flatMap((s) => idx.get(`size:${s}`) ?? []) : [...idx.values()].flat()
-      return [...new Set(cands)].filter((p) => langOfPath(p) === lang && fileHash(p) === h)
+      return [...new Set(cands)].filter(ok)
     }
     let wsRoot: string | null = null
     let hits: string[] = []
@@ -312,7 +334,15 @@ export default function activate(orca: OrcaWorkerApi): void {
         if (hits.length) { wsRoot = r; break }
       }
     }
-    if (!wsRoot) return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: 'Không tìm thấy file này trong workspace nào của Orca.' }
+    if (!wsRoot) {
+      // Workspace dang focus nam tren may khac (SSH / runtime ghep doi): worker chi doc duoc dia cua may nay.
+      const ctx = await orca.host.call('workspace.readContext', {}).catch(() => null)
+      const remote = ctx ? workspaces.find((w) => !isLocal(w) && w.name === ctx.displayName) : undefined
+      const message = remote
+        ? `Workspace "${remote.name}" nằm trên máy khác (${remote.hostId}); plugin chỉ đọc được file trên máy đang chạy Orca này. Mở dự án dưới dạng workspace cục bộ để dùng Ctrl+Click.`
+        : 'Không tìm thấy file này trong workspace cục bộ nào của Orca (file mở ngoài workspace, hoặc workspace ở máy khác).'
+      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message }
+    }
     // Workspace long nhau: dung workspace Orca dai nhat chua file, roi goc du an theo ngon ngu.
     let ws = wsRoot
     for (const w of workspaces) if (isLocal(w) && norm(hits[0]).startsWith(norm(resolve(w.path)) + sep) && resolve(w.path).length > ws.length) ws = resolve(w.path)

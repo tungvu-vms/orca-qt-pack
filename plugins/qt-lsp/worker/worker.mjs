@@ -470,7 +470,30 @@ function projectRootFor2(lang, file, limit) {
 }
 
 // src/worker.ts
-var SKIP2 = /* @__PURE__ */ new Set(["node_modules", ".git", "__pycache__", ".venv", "venv", "env", "dist", ".orca", ".mypy_cache", ".pytest_cache", "site-packages", ".cache", ".qtc_clangd"]);
+var SKIP2 = /* @__PURE__ */ new Set([
+  "node_modules",
+  ".git",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "env",
+  "dist",
+  ".orca",
+  ".mypy_cache",
+  ".pytest_cache",
+  "site-packages",
+  ".cache",
+  ".qtc_clangd",
+  // workspace la thu muc home (vd. /Users/<ten>): bo qua thu muc he thong/media lon
+  "Library",
+  "Applications",
+  "AppData",
+  "Movies",
+  "Music",
+  "Pictures",
+  "Downloads",
+  "$Recycle.Bin"
+]);
 var sha = (s) => createHash("sha1").update(s.replace(/\r\n/g, "\n")).digest("hex");
 var WIN3 = process.platform === "win32";
 var PLUGIN_DIR = resolve3(dirname3(fileURLToPath(import.meta.url)), "..");
@@ -498,44 +521,55 @@ function activate(orca) {
     const m = pool.find((w) => w.name === ctx.displayName && (w.branch ?? "") === (ctx.branch ?? "")) ?? pool.find((w) => w.name === ctx.displayName);
     return m?.path ?? null;
   }
-  const MAX_FILES = 6e4;
-  function indexFor(root) {
+  const MAX_FILES = 2e5;
+  const skipDir = (n) => SKIP2.has(n) || n.startsWith(".") || /^(build|out|cmake-build-)/i.test(n);
+  function scan(root, match) {
     const cached = hashIndex.get(root);
-    if (cached && Date.now() - cached.at < 3e5) return cached.byHash;
+    if (cached && Date.now() - cached.at < 3e5) return null;
     const bySize = /* @__PURE__ */ new Map();
     let count = 0;
-    const walk = (dir, depth) => {
-      if (depth > 12 || count > MAX_FILES) return;
-      let ents = [];
-      try {
-        ents = readdirSync3(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const e of ents) {
-        const n = e.name;
-        if (e.isDirectory()) {
-          if (!SKIP2.has(n) && !n.startsWith(".") && !/^(build|out|cmake-build-)/i.test(n)) walk(join3(dir, n), depth + 1);
-          continue;
-        }
-        if (!e.isFile() || !langOfPath(n)) continue;
-        const full = join3(dir, n);
-        let size;
+    const stopAt = Date.now() + 3e4;
+    let level = [root];
+    for (let depth = 0; level.length && depth <= 14; depth++) {
+      const next = [];
+      for (const dir of level) {
+        if (count > MAX_FILES || Date.now() > stopAt) return null;
+        let ents = [];
         try {
-          size = statSync3(full).size;
+          ents = readdirSync3(dir, { withFileTypes: true });
         } catch {
           continue;
         }
-        count++;
-        const k = `size:${size}`;
-        const list = bySize.get(k);
-        if (list) list.push(full);
-        else bySize.set(k, [full]);
+        for (const e of ents) {
+          const n = e.name;
+          if (e.isDirectory()) {
+            if (!skipDir(n)) next.push(join3(dir, n));
+            continue;
+          }
+          if (!e.isFile() || !langOfPath(n)) continue;
+          const full = join3(dir, n);
+          let size;
+          try {
+            size = statSync3(full).size;
+          } catch {
+            continue;
+          }
+          count++;
+          const k = `size:${size}`;
+          const list = bySize.get(k);
+          if (list) list.push(full);
+          else bySize.set(k, [full]);
+          if (match?.(full, size)) return full;
+        }
       }
-    };
-    walk(root, 0);
+      level = next;
+    }
     hashIndex.set(root, { at: Date.now(), byHash: bySize });
-    return bySize;
+    return null;
+  }
+  function indexFor(root) {
+    scan(root);
+    return hashIndex.get(root)?.byHash ?? /* @__PURE__ */ new Map();
   }
   const hashCache = /* @__PURE__ */ new Map();
   function fileHash(p) {
@@ -730,10 +764,18 @@ function activate(orca) {
     const roots = [focused, ...known, ...workspaces.filter(isLocal).map((w) => resolve3(w.path))].filter((r, i, a) => !!r && a.findIndex((x) => x && norm(x) === norm(r)) === i);
     const h = input.hash ?? sha(input.text ?? "");
     const sizes = [input.size, input.sizeCrlf].filter((s) => typeof s === "number").flatMap((s) => [s, s + 3]);
+    const sizeSet = new Set(sizes);
+    const ok = (p) => langOfPath(p) === lang && fileHash(p) === h;
     const find = (r) => {
-      const idx = indexFor(r);
+      const cached = hashIndex.get(r);
+      if (!cached || Date.now() - cached.at >= 3e5) {
+        const hit = scan(r, (full, size) => (sizeSet.size ? sizeSet.has(size) : true) && ok(full));
+        if (hit) return [hit];
+      }
+      const idx = hashIndex.get(r)?.byHash;
+      if (!idx) return [];
       const cands = sizes.length ? sizes.flatMap((s) => idx.get(`size:${s}`) ?? []) : [...idx.values()].flat();
-      return [...new Set(cands)].filter((p) => langOfPath(p) === lang && fileHash(p) === h);
+      return [...new Set(cands)].filter(ok);
     };
     let wsRoot = null;
     let hits = [];
@@ -757,7 +799,12 @@ function activate(orca) {
         }
       }
     }
-    if (!wsRoot) return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: "Kh\xF4ng t\xECm th\u1EA5y file n\xE0y trong workspace n\xE0o c\u1EE7a Orca." };
+    if (!wsRoot) {
+      const ctx = await orca.host.call("workspace.readContext", {}).catch(() => null);
+      const remote = ctx ? workspaces.find((w) => !isLocal(w) && w.name === ctx.displayName) : void 0;
+      const message = remote ? `Workspace "${remote.name}" n\u1EB1m tr\xEAn m\xE1y kh\xE1c (${remote.hostId}); plugin ch\u1EC9 \u0111\u1ECDc \u0111\u01B0\u1EE3c file tr\xEAn m\xE1y \u0111ang ch\u1EA1y Orca n\xE0y. M\u1EDF d\u1EF1 \xE1n d\u01B0\u1EDBi d\u1EA1ng workspace c\u1EE5c b\u1ED9 \u0111\u1EC3 d\xF9ng Ctrl+Click.` : "Kh\xF4ng t\xECm th\u1EA5y file n\xE0y trong workspace c\u1EE5c b\u1ED9 n\xE0o c\u1EE7a Orca (file m\u1EDF ngo\xE0i workspace, ho\u1EB7c workspace \u1EDF m\xE1y kh\xE1c).";
+      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message };
+    }
     let ws = wsRoot;
     for (const w of workspaces) if (isLocal(w) && norm(hits[0]).startsWith(norm(resolve3(w.path)) + sep) && resolve3(w.path).length > ws.length) ws = resolve3(w.path);
     const root = projectRootFor2(lang, hits[0], ws);
