@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "qt-dev-python-lsp",
   "name": "Qt Code Intelligence (Python, QML, C++)",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "execution": "trusted-worker",
   "pluginApi": 1,
   "description": "VS Code-style editor views for Qt developers: Ctrl+Click / F12 to go to definition, hover, completion, diagnostics and semantic colors for Python (basedpyright, auto-selects the project's interpreter), QML (qmlls) and C/C++ (clangd). Works on files of other machines too, over SSH.",
@@ -75,6 +75,13 @@
         "default": ""
       },
       {
+        "key": "typeCheckingMode",
+        "title": "Python type checking",
+        "description": "How strictly Pyright checks types: off (default, like VS Code's Pylance: only syntax and unresolved imports), basic, standard, strict. Takes effect after restarting the language server.",
+        "type": "string",
+        "default": "off"
+      },
+      {
         "key": "pyrightPath",
         "title": "Pyright language server",
         "description": "Path to basedpyright's or pyright's langserver.index.js. Empty: %LOCALAPPDATA%\\orca-qt-lsp, then the global npm folder.",
@@ -111,8 +118,8 @@
       },
       {
         "key": "remoteHosts",
-        "title": "Remote SSH hosts",
-        "description": "SSH hosts (names from ~/.ssh/config, or user@host) to search when the open file is not on this machine — e.g. a workspace on another computer. Separate with commas. Needs key login (no password prompt) and Node.js 18+ on that host; the plugin copies its agent to ~/.orca-qt-lsp there and installs basedpyright if missing.",
+        "title": "Extra SSH hosts",
+        "description": "Usually empty: when the open file is not on this machine the plugin searches every host in ~/.ssh/config by itself (read-only, in parallel) and remembers the one that has the project. Use the machine button at the bottom of the editor to pick or type a host for a project. Add hosts here only if they are not in ~/.ssh/config (user@host), separated by commas.",
         "type": "string",
         "default": ""
       },

@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
+import { PROBE_SCRIPT, type ProbeQuery } from './probe-script'
 
 export interface RemoteInfo { version: string; platform: string; node: string; home: string }
 
@@ -68,6 +69,27 @@ export class RemoteAgent {
     })
   }
 
+  private nodeKnown = false
+  private nodeCandidates() {
+    if (this.nodeKnown) return [this.node]
+    const custom = String(this.settings.remoteNode ?? '').trim()
+    return custom ? [(a: string) => [custom, a], ...NODE_CANDIDATES] : NODE_CANDIDATES
+  }
+
+  /** Do tim file tren may kia, chi doc (xem probe-script.ts). Nem loi neu khong SSH/khong chay duoc node. */
+  async probe(q: ProbeQuery): Promise<{ path: string; root: string } | null> {
+    const script = `const Q=${JSON.stringify(Buffer.from(JSON.stringify(q)).toString('base64'))};${PROBE_SCRIPT}`
+    let last = ''
+    for (const node of this.nodeCandidates()) {
+      const r = await this.run(node('-'), script, q.ms + 20000)
+      const m = /QTLSP-FOUND (.+)/.exec(r.out)
+      if (m || r.out.includes('QTLSP-NONE')) { this.node = node; this.nodeKnown = true; return m ? JSON.parse(m[1]) : null }
+      last = (r.err || r.out).trim().split('\n').pop()?.slice(0, 160) ?? String(r.code)
+      if (r.code === 255) break
+    }
+    throw new Error(last || 'không chạy được node')
+  }
+
   /** Chep agent sang may kia (neu chua co ban nay) va tim node dung duoc. */
   private async install(): Promise<void> {
     const b64 = Buffer.from(this.agentSource).toString('base64')
@@ -78,11 +100,9 @@ export class RemoteAgent {
       `for(const n of fs.readdirSync(d))if(/^agent-[0-9a-f]+\\.mjs$/.test(n)&&n!=='agent-${this.version}.mjs')try{fs.unlinkSync(path.join(d,n))}catch{}` +
       `console.log('QTLSP-OK '+process.version+' '+process.platform)\n`
     const tried: string[] = []
-    const custom = String(this.settings.remoteNode ?? '').trim()
-    const candidates = custom ? [(a: string) => [custom, a], ...NODE_CANDIDATES] : NODE_CANDIDATES
-    for (const node of candidates) {
+    for (const node of this.nodeCandidates()) {
       const r = await this.run(node('-'), script)
-      if (r.out.includes('QTLSP-OK')) { this.node = node; this.log(`${this.host}: agent ${this.version} san sang (${r.out.trim().split(' ').slice(1).join(' ')}, ${node('').join(' ')})`); return }
+      if (r.out.includes('QTLSP-OK')) { this.node = node; this.nodeKnown = true; this.log(`${this.host}: agent ${this.version} san sang (${r.out.trim().split(' ').slice(1).join(' ')}, ${node('').join(' ')})`); return }
       tried.push(`${node('').join(' ')}: ${(r.err || r.out).trim().split('\n').pop()?.slice(0, 160) ?? r.code}`)
       // Loi SSH (khong ket noi/khong co khoa) thi thu node khac cung vo ich
       if (r.code === 255) break

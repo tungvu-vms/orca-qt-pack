@@ -6,9 +6,10 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { createCore } from './core'
+import { installPyright as installPyrightAt } from './pyright-install'
 
 declare const __AGENT_VERSION__: string
 export const AGENT_VERSION = __AGENT_VERSION__
@@ -47,21 +48,7 @@ function rootsOf(hints?: string[]) {
   return { focused: list[0] ?? null, roots: [...new Set(list)] }
 }
 
-async function installPyright(): Promise<string | null> {
-  const entry = join(HOME, 'node_modules', 'basedpyright', 'langserver.index.js')
-  if (existsSync(entry)) return entry
-  log('cai basedpyright vao ' + HOME + ' ...')
-  // npm di kem chinh node dang chay (nvm/fnm khong dua npm vao PATH cua phien SSH): goi thang npm-cli.js bang node nay.
-  const binDir = dirname(process.execPath)
-  const cli = [join(binDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'), join(binDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')].find((p) => existsSync(p))
-  const args = ['install', '--prefix', HOME, 'basedpyright@1.40.2', '--no-audit', '--no-fund', '--no-update-notifier', '--loglevel=error']
-  const env = { ...process.env, PATH: binDir + (process.platform === 'win32' ? ';' : ':') + (process.env.PATH ?? '') }
-  const r = cli
-    ? spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', env, timeout: 300000, windowsHide: true })
-    : spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, { encoding: 'utf8', env, shell: process.platform === 'win32', timeout: 300000, windowsHide: true })
-  if (r.status !== 0) { log('npm install basedpyright that bai: ' + (r.stderr || r.error?.message || '').slice(0, 300)); return null }
-  return existsSync(entry) ? entry : null
-}
+const installPyright = () => installPyrightAt(HOME, process.execPath, log)
 
 const core = createCore({
   log,

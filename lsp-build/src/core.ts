@@ -8,6 +8,7 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { LspClient } from './lsp-client'
+import { installPyright } from './pyright-install'
 import { discoverInterpreters, type Interpreter } from './interpreters'
 import { EXTS_OF_LANG, LANGUAGE_ID, SERVER_LABEL, findBuildDirs, findClangd, findQmlls, projectRootFor, type Lang } from './servers'
 import type {
@@ -149,6 +150,11 @@ export function createCore(host: CoreEnv): Core {
     for (const c of WIN ? ['C:\\Program Files\\nodejs\\node.exe'] : ['/usr/local/bin/node', '/opt/homebrew/bin/node', '/usr/bin/node']) if (existsSync(c)) return c
     return process.execPath
   }
+  /** Noi tu cai basedpyright tren may nay: %LOCALAPPDATA%orca-qt-lsp (Windows), ~/.local/share/orca-qt-lsp (macOS/Linux). */
+  function pyrightPrefix(): string {
+    const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir()
+    return join(process.env.LOCALAPPDATA ?? (WIN ? join(h, 'AppData', 'Local') : join(h, '.local', 'share')), 'orca-qt-lsp')
+  }
   function pyrightEntry(): string | null {
     const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir()
     const local = process.env.LOCALAPPDATA ?? (WIN ? join(h, 'AppData', 'Local') : join(h, '.local', 'share'))
@@ -162,7 +168,7 @@ export function createCore(host: CoreEnv): Core {
   /** Lenh chay server cho (lang, root). Nem loi de hien tren thanh trang thai neu thieu chuong trinh. */
   async function commandFor(lang: Lang, root: string): Promise<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv; detail: string }> {
     if (lang === 'python') {
-      const entry = (await setting('pyrightPath', '')) || pyrightEntry() || (host.installPyright ? await host.installPyright() : null)
+      const entry = (await setting('pyrightPath', '')) || pyrightEntry() || await (host.installPyright ? host.installPyright() : installPyright(pyrightPrefix(), findNode(), host.log))
       if (!entry) throw new Error(`Không tìm thấy basedpyright/Pyright trên máy ${process.platform}. Cài (cần Node.js 18+ kèm npm): npm i --prefix ${WIN ? '"%LOCALAPPDATA%\\orca-qt-lsp"' : '~/.local/share/orca-qt-lsp'} basedpyright@1.40.2`)
       const node = (await setting('nodePath', '')) || findNode()
       return { cmd: node, args: [entry, '--stdio'], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, detail: entry.includes('basedpyright') ? 'basedpyright' : 'pyright' }
@@ -199,6 +205,7 @@ export function createCore(host: CoreEnv): Core {
     const srv: Server = { lang, root, client, ready: Promise.resolve(), open: new Map(), diagnostics: new Map(), legend: null, interpreter: null, detail }
     client.onExit = (code) => { host.log(`${lang} server exited (${code}) for ${root}`); if (servers.get(key(lang, root)) === srv) servers.delete(key(lang, root)) }
 
+    const typeMode = String(await setting('typeCheckingMode', 'off')).trim() || 'off'
     if (lang === 'python') {
       srv.interpreter = (await interpretersFor(root, file))[0] ?? null
       host.log(`interpreter for ${root}: ${srv.interpreter ? `${srv.interpreter.path} [${srv.interpreter.source}]` : 'none'}`)
@@ -209,7 +216,8 @@ export function createCore(host: CoreEnv): Core {
         const py = srv.interpreter?.path
         if (it.section === 'python') return py ? { pythonPath: py, defaultInterpreterPath: py } : {}
         if (it.section === 'python.analysis' || it.section === 'basedpyright.analysis') {
-          return { typeCheckingMode: 'standard', diagnosticMode: 'openFilesOnly', autoSearchPaths: true, useLibraryCodeForTypes: true, autoImportCompletions: true }
+          // Mac dinh 'off' giong Pylance cua VS Code: chi bao loi cu phap/import, khong soi kieu.
+          return { typeCheckingMode: typeMode, diagnosticMode: 'openFilesOnly', autoSearchPaths: true, useLibraryCodeForTypes: true, autoImportCompletions: true }
         }
         return {}
       }))

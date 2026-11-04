@@ -156,6 +156,66 @@ async function main() {
   // Khong dang ky 'editor.flush' o day: session() da tu xu ly khi Orca luu.
   // Dang ky them lam gui ban sua 2 lan cung luc -> xung dot -> "Failed to save the file".
 
+  // --- May chua code cua du an (goc duoi ben trai): tu dong, hoac chon may SSH cho du an nay ---
+  const hostBtn = document.getElementById('host') as HTMLButtonElement
+  const pickerEl = document.getElementById('picker')!
+  const pickerFilter = document.getElementById('picker-filter') as HTMLInputElement
+  const pickerList = document.getElementById('picker-list')!
+  const showHost = (host: string | null, auto: boolean) => {
+    hostBtn.hidden = false
+    hostBtn.textContent = host ? `⇄ ${host}` : '⇄ Máy này'
+    hostBtn.title = (host ? `Code của dự án này nằm trên ${host} (SSH)` : 'Code nằm trên máy đang mở Orca') + (auto ? ' — tự phát hiện' : ' — đã chọn') + '\nBấm để đổi máy cho dự án này'
+  }
+  type HostChoice = { project: string; chosen: string | null; hosts: string[] }
+  hostBtn.onclick = async () => {
+    const c = await req<HostChoice>('lsp.hostChoice', null, 15000).catch(reportError)
+    if (!c) return
+    const items: { id: string | null; label: string; hint: string }[] = [
+      { id: null, label: 'Tự động', hint: 'Tìm trên máy này, rồi mọi máy trong ~/.ssh/config; nhớ máy có file' },
+      { id: 'local', label: 'Máy này', hint: 'Chỉ tìm trên máy đang mở Orca' },
+      ...c.hosts.map((h) => ({ id: h, label: h, hint: 'SSH' }))
+    ]
+    let sel = Math.max(0, items.findIndex((i) => i.id === c.chosen))
+    pickerFilter.value = ''
+    pickerFilter.placeholder = `Máy chứa code của "${c.project}" — gõ để lọc, hoặc gõ user@host rồi Enter`
+    const render = () => {
+      const q = pickerFilter.value.trim().toLowerCase()
+      const shown = items.filter((i) => !q || `${i.label} ${i.hint}`.toLowerCase().includes(q))
+      if (q && !shown.some((i) => i.label.toLowerCase() === q)) shown.push({ id: pickerFilter.value.trim(), label: pickerFilter.value.trim(), hint: 'Dùng máy SSH này' })
+      sel = Math.min(sel, Math.max(0, shown.length - 1))
+      pickerList.replaceChildren(...shown.map((i, n) => {
+        const row = document.createElement('div')
+        row.className = 'pk' + (n === sel ? ' sel' : '')
+        const b = document.createElement('b'); b.textContent = (i.id === c.chosen ? '✓ ' : '') + i.label
+        const s = document.createElement('small'); s.textContent = i.hint
+        row.append(b, s)
+        row.onclick = () => void pick(i.id)
+        return row
+      }))
+      return shown
+    }
+    const pick = async (id: string | null) => {
+      pickerEl.hidden = true
+      pickerFilter.onkeydown = null; pickerFilter.oninput = null
+      setStatus(id && id !== 'local' ? `Đang kết nối ${id}…` : 'Đang tìm lại file…', 'busy')
+      const r = await req<{ ok: boolean; error?: string }>('lsp.setHost', { host: id }, 120000).catch(reportError)
+      if (r && !r.ok) { setStatus(r.error ?? 'Không kết nối được', 'err'); return }
+      location.reload()
+    }
+    pickerEl.hidden = false
+    render()
+    pickerFilter.oninput = () => { sel = 0; render() }
+    pickerFilter.onkeydown = (ev) => {
+      const shown = render()
+      if (ev.key === 'ArrowDown') { sel = Math.min(sel + 1, shown.length - 1); render(); ev.preventDefault() }
+      else if (ev.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); render(); ev.preventDefault() }
+      else if (ev.key === 'Enter') { if (shown[sel]) void pick(shown[sel].id); ev.preventDefault() }
+      else if (ev.key === 'Escape') { pickerEl.hidden = true; ev.preventDefault() }
+    }
+    pickerFilter.focus()
+  }
+  void req<HostChoice>('lsp.hostChoice', null, 15000).then((c) => showHost(c.chosen && c.chosen !== 'local' ? c.chosen : null, !c.chosen)).catch(() => showHost(null, true))
+
   // --- noi voi worker ---
   setStatus('Đang tìm file trong workspace…', 'busy')
   // Gui ma bam thay cho ca file: kenh plugin gioi han ~1 MiB/tin (file resources_rc.py 19 MB se loi "message too large").
@@ -167,7 +227,8 @@ async function main() {
   const path = att.path
   // File o may khac (qua SSH): worker tra duong dan "@<host>:<duong dan>"
   const remoteHost = /^@([^:]+):/.exec(path)?.[1]
-  const rel = (remoteHost ? `🖧 ${remoteHost} • ` : '') + (att.workspace ? path.slice(att.workspace.length + 1).replace(/\\/g, '/') : path)
+  const rel = att.workspace ? path.slice(att.workspace.length + 1).replace(/\\/g, '/') : path
+  showHost(remoteHost ?? null, true)
   if (!att.ok) { setStatus(`${rel}: ${att.message}`, 'err'); return }
   setStatus(`${SERVER} • ${rel}${att.server && att.server.includes('(') ? ' • ' + att.server.slice(att.server.indexOf('(') + 1, -1) : ''}${att.candidates > 1 ? ` • ⚠ ${att.candidates} file trùng nội dung, có thể nhận nhầm` : ''}`, att.candidates > 1 ? 'warn' : 'ok')
 
@@ -243,6 +304,9 @@ async function main() {
   }
   interpBtn.onclick = async () => {
     await loadInterps()
+    filterEl.placeholder = 'Chọn interpreter Python (gõ để lọc)…'
+    filterEl.oninput = () => { selIndex = 0; renderPicker() }
+    filterEl.onkeydown = interpKeys
     filterEl.value = ''
     selIndex = 0
     picker.hidden = false
@@ -250,13 +314,14 @@ async function main() {
     filterEl.focus()
   }
   filterEl.oninput = () => { selIndex = 0; renderPicker() }
-  filterEl.onkeydown = (e) => {
+  const interpKeys = (e: KeyboardEvent) => {
     const shown = renderPicker()
     if (e.key === 'ArrowDown') { selIndex = Math.min(selIndex + 1, shown.length - 1); renderPicker(); e.preventDefault() }
     else if (e.key === 'ArrowUp') { selIndex = Math.max(selIndex - 1, 0); renderPicker(); e.preventDefault() }
     else if (e.key === 'Enter') { if (shown[selIndex]) void choose(shown[selIndex]); e.preventDefault() }
     else if (e.key === 'Escape') { closePicker(); e.preventDefault() }
   }
+  filterEl.onkeydown = interpKeys
   const restartServer = async () => {
     setStatus(`Đang khởi động lại ${SERVER}…`, 'busy')
     const r = await req<{ detail: string }>('lsp.restart', { path }, 90000).catch(reportError)

@@ -1,12 +1,16 @@
 // Worker Orca cua Qt LSP: chay loi (core.ts) cho file tren may nay, va chuyen sang agent tren may khac
 // qua SSH (remote.ts) khi file mo trong Orca nam o may do (workspace SSH, may ghep doi...).
+// Tu dong toi da: khong thay file tren may nay -> do tim tren moi may trong ~/.ssh/config (chi doc, song song),
+// may nao co file thi chay agent o do va nho cho du an; nut ⇄ o thanh trang thai de doi may cho tung du an.
 // Duong dan file o may khac duoc danh dau "@<host>:<duong dan>" de editor dung nguyen nhu duong dan thuong.
 import type { OrcaWorkerApi } from 'orca/worker'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createCore } from './core'
 import { RemoteAgent, findSsh } from './remote'
+import { EXT_RE, PROBE_SKIP } from './probe-script'
 import type { AttachInput, AttachOutput } from './protocol'
 
 const WIN = process.platform === 'win32'
@@ -18,6 +22,53 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const REMOTE_RE = /^@([^:]+):(.*)$/s
 const tag = (host: string, p: string) => `@${host}:${p}`
 const untag = (p: string): { host: string; path: string } | null => { const m = REMOTE_RE.exec(p); return m ? { host: m[1], path: m[2] } : null }
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
+/** May trong ~/.ssh/config (bo mau * ?). auto=true: chi may thu tu dong duoc - bo may qua ProxyCommand
+ *  (vd. cloudflared co the mo trinh duyet dang nhap), may Git (github...), va alias trung may chi giu mot. */
+export function sshConfigHosts(auto = false, configPath = join(homedir(), '.ssh', 'config')): string[] {
+  type Block = { names: string[]; opts: Record<string, string> }
+  const blocks: Block[] = []
+  const read = (file: string, depth: number) => {
+    if (depth > 3 || !existsSync(file)) return
+    let text = ''
+    try { text = readFileSync(file, 'utf8') } catch { return }
+    let cur: Block | null = null
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.replace(/#.*/, '').trim()
+      const m = /^(\S+?)(?:\s*=\s*|\s+)(.+)$/.exec(line)
+      if (!m) continue
+      const k = m[1].toLowerCase()
+      if (k === 'host') { cur = { names: m[2].split(/\s+/).filter(Boolean), opts: {} }; blocks.push(cur); continue }
+      if (k === 'match') { cur = null; continue }
+      if (k === 'include') {
+        for (const v of m[2].split(/\s+/)) {
+          if (/[*?]/.test(v)) continue
+          const p = v.replace(/^~/, homedir())
+          read(/^([\\/]|[A-Za-z]:)/.test(p) ? p : join(homedir(), '.ssh', p), depth + 1)
+        }
+        continue
+      }
+      if (cur && !(k in cur.opts)) cur.opts[k] = m[2].trim()
+    }
+  }
+  read(configPath, 0)
+  const out: string[] = []
+  const seenTarget = new Set<string>()
+  for (const b of blocks) {
+    for (const n of b.names) {
+      if (/[*?!]/.test(n)) continue
+      const hostName = (b.opts.hostname ?? n).toLowerCase()
+      if (/^(github\.com|gitlab\.com|bitbucket\.org|ssh\.dev\.azure\.com|ssh\.github\.com)$/.test(hostName)) continue
+      if (auto && b.opts.proxycommand) continue
+      const target = `${(b.opts.user ?? '').toLowerCase()}@${hostName}:${b.opts.port ?? '22'}|${b.opts.proxyjump ?? ''}`
+      if (auto && seenTarget.has(target)) continue
+      seenTarget.add(target)
+      out.push(n)
+    }
+  }
+  return [...new Set(out)]
+}
 
 export default function activate(orca: OrcaWorkerApi): void {
   const setting = async <T,>(k: string, fallback: T): Promise<T> => {
@@ -58,13 +109,23 @@ export default function activate(orca: OrcaWorkerApi): void {
   // ---------- may khac qua SSH ----------
   const agents = new Map<string, RemoteAgent>()
   let agentSource: string | null = null
-  const hostsSetting = async () => String(await setting('remoteHosts', '')).split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean)
+  const cfg = { sshPath: '', remoteRoots: '', remoteNode: '' }
+  const loadCfg = async () => {
+    cfg.sshPath = String(await setting('sshPath', ''))
+    cfg.remoteRoots = String(await setting('remoteRoots', ''))
+    cfg.remoteNode = String(await setting('remoteNode', ''))
+  }
+  const cfgReady = loadCfg()
+  try {
+    (orca.settings as any).onDidChange?.(() => { void loadCfg(); for (const a of agents.values()) a.stop(); agents.clear() })
+  } catch { /* ban Orca cu khong co onDidChange */ }
+  const extraHosts = async () => String(await setting('remoteHosts', '')).split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean)
 
-  async function agentFor(host: string): Promise<RemoteAgent> {
+  function remoteFor(host: string): RemoteAgent {
     let a = agents.get(host)
     if (!a) {
       agentSource ??= readFileSync(join(HERE, 'agent.mjs'), 'utf8')
-      a = new RemoteAgent(host, findSsh(await setting('sshPath', '')), agentSource, { remoteRoots: await setting('remoteRoots', ''), remoteNode: await setting('remoteNode', '') })
+      a = new RemoteAgent(host, findSsh(cfg.sshPath), agentSource, { remoteRoots: cfg.remoteRoots, remoteNode: cfg.remoteNode })
       a.log = (l) => orca.log(l)
       a.onEvent = (ev, p: any) => {
         // Su kien tu agent mang duong dan cua may kia: gan nhan host truoc khi gui cho editor
@@ -73,17 +134,21 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
       agents.set(host, a)
     }
+    return a
+  }
+  async function agentFor(host: string): Promise<RemoteAgent> {
+    await cfgReady
+    const a = remoteFor(host)
     await a.start()
     return a
   }
 
-  /** Duong dan workspace Orca dang tro sang may khac (SSH...): goi y cho agent noi can tim. */
+  /** Duong dan workspace Orca dang tro sang may khac (SSH...): goi y cho may kia noi can tim. */
   async function remoteHints(): Promise<string[]> {
     const { workspaces } = await orca.host.call('workspace.list', {}).catch(() => ({ workspaces: [] as { path: string; hostId: string | null }[] }))
     return workspaces.filter((w) => !isLocal(w)).map((w) => w.path)
   }
 
-  /** Doi moi duong dan "path" trong ket qua cua agent sang dang co nhan host. */
   // Chi gan nhan cho duong dan FILE (ket qua attach, locations, peek); interpreter (python.exe) giu nguyen
   // vi editor gui lai nguyen gia tri do cho agent.
   const SKIP_KEYS = new Set(['current', 'list', 'interpreter'])
@@ -97,34 +162,89 @@ export default function activate(orca: OrcaWorkerApi): void {
     return v
   }
 
+  // ---------- May cho tung du an (nut ⇄ o thanh trang thai cua editor) ----------
+  // Khoa = ten workspace Orca dang focus. Gia tri: ten may SSH, 'local', hoac khong co (tu dong).
+  const PROJECT_HOSTS = 'projectHosts'
+  const NO_PROJECT = '(không có workspace)'
+  async function projectKey(): Promise<string> {
+    const ctx = await orca.host.call('workspace.readContext', {}).catch(() => null)
+    return ctx?.displayName || NO_PROJECT
+  }
+  async function projectHosts(): Promise<Record<string, string>> {
+    try { const v = await orca.storage.get(PROJECT_HOSTS); return v && typeof v === 'object' ? { ...(v as Record<string, string>) } : {} } catch { return {} }
+  }
+  async function rememberHost(key: string, host: string | null) {
+    const map = await projectHosts()
+    if (host) map[key] = host; else delete map[key]
+    await orca.storage.set(PROJECT_HOSTS, map as any)
+  }
+
+  async function attachOn(host: string, input: AttachInput, hints: string[]): Promise<AttachOutput> {
+    const a = await agentFor(host)
+    const r: AttachOutput = await a.call('lsp.attach', { ...input, hints }, 120000)
+    return r.path ? tagPaths(host, r) : r
+  }
+
   async function attach(input: AttachInput): Promise<AttachOutput> {
-    const res: AttachOutput = await local.handlers['lsp.attach'](input)
-    if (res.path) return res
-    const hosts = await hostsSetting()
-    if (!hosts.length) {
-      return { ...res, message: 'Không tìm thấy file này trên máy này. Nếu file nằm ở máy khác (SSH, máy ghép nối): thêm máy đó vào Settings → Qt Code Intelligence → "Remote SSH hosts".' }
-    }
-    const hints = await remoteHints()
-    const errors: string[] = []
-    for (const host of hosts) {
+    await cfgReady
+    const key = await projectKey()
+    const chosen = (await projectHosts())[key]
+    if (chosen === 'local') return local.handlers['lsp.attach'](input)
+    // Du an da co may (chon tay hoac tu tim lan truoc): vao thang may do
+    if (chosen) {
       try {
-        const a = await agentFor(host)
-        const r: AttachOutput = await a.call('lsp.attach', { ...input, hints }, 120000)
-        if (r.path) return tagPaths(host, r)
-        errors.push(`${host}: không có`)
+        const r = await attachOn(chosen, input, await remoteHints())
+        if (r.path) return r
+        // May cu khong con file (doi may, xoa du an): bo nho, tim lai tu dau
+        await rememberHost(key, null)
       } catch (e) {
-        errors.push(e instanceof Error ? e.message : String(e))
+        return { ok: false, path: null, candidates: 0, workspace: null, server: null, message: `${chosen}: ${errText(e)} — bấm ⇄ ở góc dưới để chọn máy khác.` }
       }
     }
-    return { ...res, message: `Không tìm thấy file trên máy này và trên ${hosts.join(', ')} (${errors.join('; ')}). Máy kia: thêm thư mục dự án vào "Remote project folders" nếu không phải workspace Orca.` }
+    const res: AttachOutput = await local.handlers['lsp.attach'](input)
+    if (res.path) return res
+
+    // Tu dong: do moi may SSH biet duoc (Settings + ~/.ssh/config) cung luc bang script chi doc (khong cai gi);
+    // may nao co file thi moi chay agent o do va nho cho du an nay. May can mat khau / dang tat thi bo qua (BatchMode).
+    const hosts = [...new Set([...(await extraHosts()), ...sshConfigHosts(true)])].slice(0, 40)
+    if (!hosts.length) {
+      return { ...res, message: 'Không tìm thấy file trên máy này, và ~/.ssh/config chưa có máy nào. Nếu code ở máy khác: bấm ⇄ ở góc dưới, gõ user@host.' }
+    }
+    const hints = await remoteHints()
+    const sizes = [input.size, input.sizeCrlf].filter((s): s is number => typeof s === 'number').flatMap((s) => [s, s + 3])
+    const roots = cfg.remoteRoots.split(/[;\n]/).map((s) => s.trim()).filter(Boolean)
+    const q = { hash: input.hash ?? '', sizes, ext: EXT_RE[input.language], hints, roots, skip: PROBE_SKIP, ms: 25000 }
+    const errors: string[] = []
+    const found = await new Promise<{ host: string; root: string } | null>((done) => {
+      let left = hosts.length
+      let settled = false
+      for (const host of hosts) {
+        void remoteFor(host).probe(q).then(
+          (hit) => { if (hit && !settled) { settled = true; done({ host, root: hit.root }) } else if (!hit) errors.push(`${host}: không có`) },
+          (e) => { errors.push(`${host}: ${errText(e).slice(0, 80)}`) }
+        ).finally(() => { if (--left === 0 && !settled) { settled = true; done(null) } })
+      }
+    })
+    if (found) {
+      orca.log(`project "${key}" -> ${found.host} (tự tìm thấy trong ${found.root})`)
+      try {
+        const r = await attachOn(found.host, input, [found.root, ...hints])
+        // Chi nho khi biet du an (workspace dang focus); khong focus thi lan sau van tu tim lai
+        if (r.path) { if (key !== NO_PROJECT) await rememberHost(key, found.host); return r }
+      } catch (e) {
+        return { ...res, message: `Tìm thấy file trên ${found.host} nhưng không chạy được agent: ${errText(e)}` }
+      }
+    }
+    orca.log(`attach miss on ${hosts.length} hosts: ${errors.join('; ')}`)
+    return { ...res, message: `Không tìm thấy file trên máy này và ${hosts.length} máy SSH (${errors.slice(0, 3).join('; ')}${errors.length > 3 ? '…' : ''}). Bấm ⇄ ở góc dưới để chọn máy.` }
   }
 
   /** Moi handler khac: duong dan co nhan host thi chuyen sang agent cua host do. */
   const route = (name: string) => async (input: any) => {
     const target = input && typeof input.path === 'string' ? untag(input.path) : null
     if (!target) return local.handlers[name](input)
-    const a = await agentFor(target.host)
     if (name === 'lsp.reveal') return { opened: false, reason: 'remote' }
+    const a = await agentFor(target.host)
     const out = tagPaths(target.host, await a.call(name, { ...input, path: target.path }))
     // May khac: Orca khong mo duoc tab cho file do qua plugin -> editor hien peek thay vi mo tab
     if (name === 'lsp.definition' && out?.locations) for (const l of out.locations) l.inWorkspace = false
@@ -133,8 +253,28 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('lsp.attach', (input) => attach(input as unknown as AttachInput) as any)
   for (const name of Object.keys(local.handlers)) if (name !== 'lsp.attach') orca.panels.handle(name, route(name) as any)
+
+  /** Nut ⇄: may dang dung cho du an + danh sach may goi y. */
+  orca.panels.handle('lsp.hostChoice', async () => {
+    const key = await projectKey()
+    const map = await projectHosts()
+    const hosts = [...new Set([...(await extraHosts()), ...Object.values(map).filter((h) => h !== 'local'), ...sshConfigHosts(false)])]
+    return { project: key, chosen: map[key] ?? null, hosts } as any
+  })
+  orca.panels.handle('lsp.setHost', async (input) => {
+    const host = ((input as { host?: string | null } | null)?.host ?? '').trim() || null
+    const key = await projectKey()
+    await rememberHost(key, host)
+    orca.log(`project "${key}" -> ${host ?? 'tự động'} (chọn tay)`)
+    // Kiem tra ket noi ngay de bao loi som (khoa SSH, Node...)
+    if (host && host !== 'local') {
+      try { const a = await agentFor(host); return { project: key, chosen: host, ok: true, info: a.info } as any }
+      catch (e) { return { project: key, chosen: host, ok: false, error: errText(e) } as any }
+    }
+    return { project: key, chosen: host, ok: true } as any
+  })
   orca.panels.handle('lsp.remoteStatus', async () => ({
-    hosts: await hostsSetting(),
+    projects: await projectHosts(),
     agents: [...agents.values()].map((a) => ({ host: a.host, alive: a.alive, info: a.info, error: a.lastError }))
   }) as any)
 

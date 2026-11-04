@@ -1,12 +1,13 @@
 // src/worker.ts
-import { readFileSync as readFileSync3 } from "node:fs";
-import { dirname as dirname4, join as join4, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync6, readFileSync as readFileSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/core.ts
 import { createHash } from "node:crypto";
-import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync2, statSync as statSync3 } from "node:fs";
-import { dirname as dirname3, join as join3, resolve as resolve3, sep } from "node:path";
+import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync2, statSync as statSync3 } from "node:fs";
+import { dirname as dirname4, join as join4, resolve as resolve3, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -114,15 +115,63 @@ ${s}`);
   }
 };
 
+// src/pyright-install.ts
+import { spawn as spawn2 } from "node:child_process";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+var PYRIGHT_VERSION = "1.40.2";
+var running = /* @__PURE__ */ new Map();
+function installPyright(prefix, node, log) {
+  const entry = join(prefix, "node_modules", "basedpyright", "langserver.index.js");
+  if (existsSync(entry)) return Promise.resolve(entry);
+  const busy = running.get(prefix);
+  if (busy) return busy;
+  const job = new Promise((resolve5) => {
+    mkdirSync(prefix, { recursive: true });
+    const binDir = dirname(node);
+    const cli = [join(binDir, "node_modules", "npm", "bin", "npm-cli.js"), join(binDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")].find((p2) => existsSync(p2));
+    const args = ["install", "--prefix", prefix, `basedpyright@${PYRIGHT_VERSION}`, "--no-audit", "--no-fund", "--no-update-notifier", "--loglevel=error"];
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: "1", PATH: binDir + (process.platform === "win32" ? ";" : ":") + (process.env.PATH ?? "") };
+    log(`cai basedpyright ${PYRIGHT_VERSION} vao ${prefix} ...`);
+    const p = cli ? spawn2(node, [cli, ...args], { env, windowsHide: true }) : spawn2(process.platform === "win32" ? "npm.cmd" : "npm", args, { env, shell: process.platform === "win32", windowsHide: true });
+    let err = "";
+    p.stderr?.on("data", (d) => {
+      err = (err + d).slice(-1500);
+    });
+    const timer = setTimeout(() => {
+      try {
+        p.kill();
+      } catch {
+      }
+    }, 3e5);
+    p.on("error", (e) => {
+      err += e.message;
+    });
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      running.delete(prefix);
+      if (code === 0 && existsSync(entry)) {
+        log("da cai basedpyright");
+        resolve5(entry);
+      } else {
+        log(`cai basedpyright that bai (${code}): ${err.trim().slice(-400)}`);
+        resolve5(null);
+      }
+    });
+  });
+  running.set(prefix, job);
+  return job;
+}
+
 // src/interpreters.ts
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync as existsSync2, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname as dirname2, isAbsolute, join as join2, resolve } from "node:path";
 var WIN = process.platform === "win32";
 var lower = (p) => WIN ? p.toLowerCase() : p;
 function envExe(envDir) {
-  const c = WIN ? [join(envDir, "Scripts", "python.exe"), join(envDir, "bin", "python.exe"), join(envDir, "python.exe")] : [join(envDir, "bin", "python"), join(envDir, "bin", "python3")];
-  return c.find((f) => existsSync(f)) ?? null;
+  const c = WIN ? [join2(envDir, "Scripts", "python.exe"), join2(envDir, "bin", "python.exe"), join2(envDir, "python.exe")] : [join2(envDir, "bin", "python"), join2(envDir, "bin", "python3")];
+  return c.find((f) => existsSync2(f)) ?? null;
 }
 var SKIP = /* @__PURE__ */ new Set([".git", "node_modules", ".tox", "__pycache__", "bin", "Scripts", ".mypy_cache", ".pytest_cache", ".orca"]);
 var PROJECT_MARKERS = ["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json", ".git"];
@@ -157,7 +206,7 @@ function readJsonc(file) {
 }
 function venvVersion(envDir) {
   try {
-    const cfg = readFileSync(join(envDir, "pyvenv.cfg"), "utf8");
+    const cfg = readFileSync(join2(envDir, "pyvenv.cfg"), "utf8");
     return /^\s*(?:version_info|version)\s*=\s*([\d.]+)/im.exec(cfg)?.[1] ?? null;
   } catch {
     return null;
@@ -182,10 +231,10 @@ function cmpVersionDesc(a, b) {
   for (let i = 0; i < 3; i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pb[i] ?? 0) - (pa[i] ?? 0);
   return 0;
 }
-var isEnvDir = (dir) => existsSync(join(dir, "pyvenv.cfg")) || existsSync(join(dir, "conda-meta"));
+var isEnvDir = (dir) => existsSync2(join2(dir, "pyvenv.cfg")) || existsSync2(join2(dir, "conda-meta"));
 function projectEnvs(root) {
   const found = /* @__PURE__ */ new Set();
-  for (const n of [".venv", ".conda", ".virtualenv", "venv"]) if (isEnvDir(join(root, n))) found.add(join(root, n));
+  for (const n of [".venv", ".conda", ".virtualenv", "venv"]) if (isEnvDir(join2(root, n))) found.add(join2(root, n));
   let names = [];
   try {
     names = readdirSync(root);
@@ -193,7 +242,7 @@ function projectEnvs(root) {
   }
   for (const n of names) {
     if (SKIP.has(n)) continue;
-    const full = join(root, n);
+    const full = join2(root, n);
     try {
       if (statSync(full).isDirectory() && isEnvDir(full)) found.add(full);
     } catch {
@@ -202,12 +251,12 @@ function projectEnvs(root) {
   return [...found];
 }
 function projectRootFor(file, limit) {
-  let dir = dirname(resolve(file));
+  let dir = dirname2(resolve(file));
   const stop = lower(resolve(limit));
   while (lower(dir).startsWith(stop)) {
-    if (PROJECT_MARKERS.some((m) => existsSync(join(dir, m))) || projectEnvs(dir).length) return dir;
+    if (PROJECT_MARKERS.some((m) => existsSync2(join2(dir, m))) || projectEnvs(dir).length) return dir;
     if (lower(dir) === stop) break;
-    const up = dirname(dir);
+    const up = dirname2(dir);
     if (up === dir) break;
     dir = up;
   }
@@ -215,28 +264,28 @@ function projectRootFor(file, limit) {
 }
 function vscodeInterpreter(root) {
   for (let dir = root, i = 0; i < 6; i++) {
-    const s = readJsonc(join(dir, ".vscode", "settings.json"));
+    const s = readJsonc(join2(dir, ".vscode", "settings.json"));
     const raw = s?.["python.defaultInterpreterPath"] ?? s?.["python.pythonPath"];
     if (raw && raw !== "python") {
       const p = raw.replace(/\$\{workspaceFolder\}/g, dir).replace(/\$\{env:([^}]+)\}/g, (_, k) => process.env[k] ?? "");
       const abs = isAbsolute(p) ? p : resolve(dir, p);
-      if (existsSync(abs) && statSync(abs).isFile()) return abs;
+      if (existsSync2(abs) && statSync(abs).isFile()) return abs;
       const exe2 = envExe(abs);
       if (exe2) return exe2;
     }
-    const up = dirname(dir);
+    const up = dirname2(dir);
     if (up === dir) break;
     dir = up;
   }
   return null;
 }
 function pyrightConfigInterpreter(root) {
-  const cfg = readJsonc(join(root, "pyrightconfig.json"));
+  const cfg = readJsonc(join2(root, "pyrightconfig.json"));
   let venvPath = cfg?.venvPath;
   let venv = cfg?.venv;
   if (!venv) {
     try {
-      const toml = readFileSync(join(root, "pyproject.toml"), "utf8");
+      const toml = readFileSync(join2(root, "pyproject.toml"), "utf8");
       const sec = /\[tool\.(?:based)?pyright\]([\s\S]*?)(?:\n\[|$)/.exec(toml)?.[1] ?? "";
       venvPath = /venvPath\s*=\s*"([^"]+)"/.exec(sec)?.[1] ?? venvPath;
       venv = /^\s*venv\s*=\s*"([^"]+)"/m.exec(sec)?.[1];
@@ -257,22 +306,22 @@ function globalCandidates() {
       }
     } catch {
     }
-    const base = join(process.env.LOCALAPPDATA ?? join(process.env.USERPROFILE ?? "", "AppData", "Local"), "Programs", "Python");
+    const base = join2(process.env.LOCALAPPDATA ?? join2(process.env.USERPROFILE ?? "", "AppData", "Local"), "Programs", "Python");
     try {
-      for (const d of readdirSync(base)) out.push(join(base, d, "python.exe"));
+      for (const d of readdirSync(base)) out.push(join2(base, d, "python.exe"));
     } catch {
     }
   }
   const names = WIN ? ["python.exe"] : ["python3", "python"];
   for (const dir of (process.env.PATH ?? process.env.Path ?? "").split(WIN ? ";" : ":")) {
     if (!dir || /WindowsApps/i.test(dir)) continue;
-    for (const n of names) out.push(join(dir, n));
+    for (const n of names) out.push(join2(dir, n));
   }
   if (!WIN) out.push("/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3");
   const seen = /* @__PURE__ */ new Set();
   return out.filter((p) => {
     const k = lower(p);
-    if (seen.has(k) || !existsSync(p)) return false;
+    if (seen.has(k) || !existsSync2(p)) return false;
     seen.add(k);
     return true;
   });
@@ -283,11 +332,11 @@ function discoverInterpreters(file, root, opts = {}) {
   const seen = /* @__PURE__ */ new Set();
   const make = (path, source, reason) => {
     const key2 = lower(resolve(path));
-    if (seen.has(key2) || !existsSync(path)) return null;
+    if (seen.has(key2) || !existsSync2(path)) return null;
     seen.add(key2);
-    const envDir = dirname(dirname(path));
-    const isVenv = isEnvDir(envDir) || isEnvDir(dirname(path));
-    const dir = isEnvDir(envDir) ? envDir : isEnvDir(dirname(path)) ? dirname(path) : null;
+    const envDir = dirname2(dirname2(path));
+    const isVenv = isEnvDir(envDir) || isEnvDir(dirname2(path));
+    const dir = isEnvDir(envDir) ? envDir : isEnvDir(dirname2(path)) ? dirname2(path) : null;
     const version = dir && venvVersion(dir) || runVersion(path);
     const name = dir ? lower(dir).startsWith(lower(project) + (WIN ? "\\" : "/")) ? dir.slice(project.length + 1).replace(/\\/g, "/") : basename(dir) : `Python ${version ?? ""}`.trim();
     return { path: resolve(path), label: isVenv ? `${name}${version ? ` (${version})` : ""}` : `${name} (global)`, version, source, envDir: dir, reason };
@@ -305,7 +354,7 @@ function discoverInterpreters(file, root, opts = {}) {
   for (let dir = project; lower(dir).startsWith(lower(resolve(root))); ) {
     levels.push(dir);
     if (lower(dir) === lower(resolve(root))) break;
-    const up = dirname(dir);
+    const up = dirname2(dir);
     if (up === dir) break;
     dir = up;
   }
@@ -321,8 +370,8 @@ function discoverInterpreters(file, root, opts = {}) {
 }
 
 // src/servers.ts
-import { existsSync as existsSync2, readdirSync as readdirSync2, statSync as statSync2 } from "node:fs";
-import { dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync3, readdirSync as readdirSync2, statSync as statSync2 } from "node:fs";
+import { dirname as dirname3, join as join3, resolve as resolve2 } from "node:path";
 import { homedir } from "node:os";
 var EXTS_OF_LANG = {
   python: /\.(py|pyi|pyw)$/i,
@@ -343,7 +392,7 @@ var lower2 = (p) => WIN2 ? p.toLowerCase() : p;
 function qtBinDirs(extra) {
   const out = [];
   if (extra) out.push(extra);
-  const roots = WIN2 ? ["C:\\Qt", join2(home(), "Qt")] : [join2(home(), "Qt"), "/opt/Qt", "/usr/local/Qt"];
+  const roots = WIN2 ? ["C:\\Qt", join3(home(), "Qt")] : [join3(home(), "Qt"), "/opt/Qt", "/usr/local/Qt"];
   for (const root of roots) {
     let versions = [];
     try {
@@ -355,38 +404,38 @@ function qtBinDirs(extra) {
     for (const v of versions) {
       let kits = [];
       try {
-        kits = readdirSync2(join2(root, v));
+        kits = readdirSync2(join3(root, v));
       } catch {
         continue;
       }
-      for (const k of kits) if (existsSync2(join2(root, v, k, "bin"))) out.push(join2(root, v, k, "bin"));
+      for (const k of kits) if (existsSync3(join3(root, v, k, "bin"))) out.push(join3(root, v, k, "bin"));
     }
   }
   return out;
 }
 function firstExisting(cands) {
-  for (const c of cands) if (c && existsSync2(c)) return c;
+  for (const c of cands) if (c && existsSync3(c)) return c;
   return null;
 }
 function findQmlls(configured, qtBin) {
-  if (configured && existsSync2(configured)) return configured;
-  return firstExisting([...qtBinDirs(qtBin).map((d) => join2(d, exe("qmlls"))), ...pathDirs().map((d) => join2(d, exe("qmlls")))]);
+  if (configured && existsSync3(configured)) return configured;
+  return firstExisting([...qtBinDirs(qtBin).map((d) => join3(d, exe("qmlls"))), ...pathDirs().map((d) => join3(d, exe("qmlls")))]);
 }
 function findClangd(configured) {
-  if (configured && existsSync2(configured)) return configured;
+  if (configured && existsSync3(configured)) return configured;
   const c = [];
   if (WIN2) {
-    for (const root of ["C:\\Qt", join2(home(), "Qt")]) c.push(join2(root, "Tools", "QtCreator", "bin", "clang", "bin", "clangd.exe"));
+    for (const root of ["C:\\Qt", join3(home(), "Qt")]) c.push(join3(root, "Tools", "QtCreator", "bin", "clang", "bin", "clangd.exe"));
     c.push("C:\\Program Files\\LLVM\\bin\\clangd.exe");
   } else {
-    c.push("/Applications/Qt Creator.app/Contents/Resources/libexec/clang/bin/clangd", join2(home(), "Qt", "Tools", "QtCreator", "libexec", "qtcreator", "clang", "bin", "clangd"), "/usr/bin/clangd", "/usr/local/bin/clangd", "/opt/homebrew/opt/llvm/bin/clangd");
+    c.push("/Applications/Qt Creator.app/Contents/Resources/libexec/clang/bin/clangd", join3(home(), "Qt", "Tools", "QtCreator", "libexec", "qtcreator", "clang", "bin", "clangd"), "/usr/bin/clangd", "/usr/local/bin/clangd", "/opt/homebrew/opt/llvm/bin/clangd");
   }
-  c.push(...pathDirs().map((d) => join2(d, exe("clangd"))));
+  c.push(...pathDirs().map((d) => join3(d, exe("clangd"))));
   try {
-    const vsc = join2(home(), ".vscode", "extensions");
+    const vsc = join3(home(), ".vscode", "extensions");
     for (const d of readdirSync2(vsc).filter((n) => n.startsWith("llvm-vs-code-extensions.vscode-clangd"))) {
-      const inst = join2(vsc, d, "install");
-      for (const v of existsSync2(inst) ? readdirSync2(inst) : []) c.push(join2(inst, v, `clangd_${v}`, "bin", exe("clangd")));
+      const inst = join3(vsc, d, "install");
+      for (const v of existsSync3(inst) ? readdirSync2(inst) : []) c.push(join3(inst, v, `clangd_${v}`, "bin", exe("clangd")));
     }
   } catch {
   }
@@ -398,9 +447,9 @@ function findBuildDirs(root, want) {
   const check = (dir) => {
     try {
       if (want === "compile_commands") {
-        const f = join2(dir, "compile_commands.json");
-        if (existsSync2(f)) hits.push({ dir, mtime: statSync2(f).mtimeMs });
-      } else if (existsSync2(join2(dir, "CMakeCache.txt")) || existsSync2(join2(dir, "qmldir"))) {
+        const f = join3(dir, "compile_commands.json");
+        if (existsSync3(f)) hits.push({ dir, mtime: statSync2(f).mtimeMs });
+      } else if (existsSync3(join3(dir, "CMakeCache.txt")) || existsSync3(join3(dir, "qmldir"))) {
         hits.push({ dir, mtime: statSync2(dir).mtimeMs });
       }
     } catch {
@@ -415,7 +464,7 @@ function findBuildDirs(root, want) {
   }
   for (const n of names) {
     if (!BUILD_DIR_RE.test(n)) continue;
-    const d = join2(root, n);
+    const d = join3(root, n);
     try {
       if (!statSync2(d).isDirectory()) continue;
     } catch {
@@ -424,7 +473,7 @@ function findBuildDirs(root, want) {
     check(d);
     try {
       for (const s of readdirSync2(d)) {
-        const sd = join2(d, s);
+        const sd = join3(d, s);
         try {
           if (statSync2(sd).isDirectory()) check(sd);
         } catch {
@@ -444,33 +493,33 @@ var PROJECT_MARKERS2 = {
 function projectRootFor2(lang, file, limit) {
   const stop = lower2(resolve2(limit));
   const chain = [];
-  for (let dir = dirname2(resolve2(file)); lower2(dir).startsWith(stop); ) {
+  for (let dir = dirname3(resolve2(file)); lower2(dir).startsWith(stop); ) {
     chain.push(dir);
     if (lower2(dir) === stop) break;
-    const up = dirname2(dir);
+    const up = dirname3(dir);
     if (up === dir) break;
     dir = up;
   }
   if (lang === "python") {
     const hasVenv = (d) => {
       try {
-        return readdirSync2(d).some((n) => existsSync2(join2(d, n, "pyvenv.cfg")));
+        return readdirSync2(d).some((n) => existsSync3(join3(d, n, "pyvenv.cfg")));
       } catch {
         return false;
       }
     };
-    for (const d of chain) if (PROJECT_MARKERS2.python.some((m) => existsSync2(join2(d, m))) || hasVenv(d)) return d;
+    for (const d of chain) if (PROJECT_MARKERS2.python.some((m) => existsSync3(join3(d, m))) || hasVenv(d)) return d;
     return resolve2(limit);
   }
   const strong = lang === "qml" ? [".qmlls.ini"] : ["compile_commands.json", ".clangd", "compile_flags.txt"];
-  for (const d of chain) if (strong.some((m) => existsSync2(join2(d, m)))) return d;
+  for (const d of chain) if (strong.some((m) => existsSync3(join3(d, m)))) return d;
   let top = null;
   for (const d of chain) {
-    if (existsSync2(join2(d, "CMakeLists.txt")) || existsSync2(join2(d, `${d.split(/[\\/]/).pop()}.pro`))) top = d;
+    if (existsSync3(join3(d, "CMakeLists.txt")) || existsSync3(join3(d, `${d.split(/[\\/]/).pop()}.pro`))) top = d;
     else if (top) break;
   }
   if (top) return top;
-  for (const d of chain) if (existsSync2(join2(d, ".git"))) return d;
+  for (const d of chain) if (existsSync3(join3(d, ".git"))) return d;
   return resolve2(limit);
 }
 
@@ -501,7 +550,7 @@ var SKIP2 = /* @__PURE__ */ new Set([
 ]);
 var sha = (s) => createHash("sha1").update(s.replace(/\r\n/g, "\n")).digest("hex");
 var WIN3 = process.platform === "win32";
-var pluginDir = () => process.env.QT_LSP_DIR || resolve3(dirname3(fileURLToPath(import.meta.url)), "..");
+var pluginDir = () => process.env.QT_LSP_DIR || resolve3(dirname4(fileURLToPath(import.meta.url)), "..");
 var norm = (p) => WIN3 ? p.toLowerCase() : p;
 var key = (lang, root) => `${lang}|${norm(root)}`;
 var langOfPath = (p) => EXTS_OF_LANG.python.test(p) ? "python" : EXTS_OF_LANG.qml.test(p) ? "qml" : EXTS_OF_LANG.cpp.test(p) ? "cpp" : null;
@@ -542,11 +591,11 @@ function createCore(host) {
         for (const e of ents) {
           const n = e.name;
           if (e.isDirectory()) {
-            if (!skipDir(n)) next.push(join3(dir, n));
+            if (!skipDir(n)) next.push(join4(dir, n));
             continue;
           }
           if (!e.isFile() || !langOfPath(n)) continue;
-          const full = join3(dir, n);
+          const full = join4(dir, n);
           let size;
           try {
             size = statSync3(full).size;
@@ -594,26 +643,30 @@ function createCore(host) {
   }
   async function interpretersFor(root, file) {
     const saved = (await savedInterpreters())[norm(root)];
-    return discoverInterpreters(file ?? join3(root, "__init__.py"), root, { saved, setting: await setting("python", "") });
+    return discoverInterpreters(file ?? join4(root, "__init__.py"), root, { saved, setting: await setting("python", "") });
   }
   function findNode() {
     const exe2 = WIN3 ? "node.exe" : "node";
-    for (const dir of (process.env.PATH ?? process.env.Path ?? "").split(WIN3 ? ";" : ":")) if (dir && existsSync3(join3(dir, exe2))) return join3(dir, exe2);
-    for (const c of WIN3 ? ["C:\\Program Files\\nodejs\\node.exe"] : ["/usr/local/bin/node", "/opt/homebrew/bin/node", "/usr/bin/node"]) if (existsSync3(c)) return c;
+    for (const dir of (process.env.PATH ?? process.env.Path ?? "").split(WIN3 ? ";" : ":")) if (dir && existsSync4(join4(dir, exe2))) return join4(dir, exe2);
+    for (const c of WIN3 ? ["C:\\Program Files\\nodejs\\node.exe"] : ["/usr/local/bin/node", "/opt/homebrew/bin/node", "/usr/bin/node"]) if (existsSync4(c)) return c;
     return process.execPath;
+  }
+  function pyrightPrefix() {
+    const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir2();
+    return join4(process.env.LOCALAPPDATA ?? (WIN3 ? join4(h, "AppData", "Local") : join4(h, ".local", "share")), "orca-qt-lsp");
   }
   function pyrightEntry() {
     const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir2();
-    const local = process.env.LOCALAPPDATA ?? (WIN3 ? join3(h, "AppData", "Local") : join3(h, ".local", "share"));
-    const appData = process.env.APPDATA ?? (WIN3 ? join3(h, "AppData", "Roaming") : void 0);
-    const c = [join3(pluginDir(), "server", "pyright", "langserver.index.js"), join3(local, "orca-qt-lsp", "node_modules", "basedpyright", "langserver.index.js")];
-    if (appData) c.push(join3(appData, "npm", "node_modules", "basedpyright", "langserver.index.js"), join3(appData, "npm", "node_modules", "pyright", "langserver.index.js"));
-    for (const p of ["/usr/local", "/opt/homebrew", join3(h, ".npm-global")]) c.push(join3(p, "lib", "node_modules", "basedpyright", "langserver.index.js"), join3(p, "lib", "node_modules", "pyright", "langserver.index.js"));
-    return c.find((p) => existsSync3(p)) ?? null;
+    const local = process.env.LOCALAPPDATA ?? (WIN3 ? join4(h, "AppData", "Local") : join4(h, ".local", "share"));
+    const appData = process.env.APPDATA ?? (WIN3 ? join4(h, "AppData", "Roaming") : void 0);
+    const c = [join4(pluginDir(), "server", "pyright", "langserver.index.js"), join4(local, "orca-qt-lsp", "node_modules", "basedpyright", "langserver.index.js")];
+    if (appData) c.push(join4(appData, "npm", "node_modules", "basedpyright", "langserver.index.js"), join4(appData, "npm", "node_modules", "pyright", "langserver.index.js"));
+    for (const p of ["/usr/local", "/opt/homebrew", join4(h, ".npm-global")]) c.push(join4(p, "lib", "node_modules", "basedpyright", "langserver.index.js"), join4(p, "lib", "node_modules", "pyright", "langserver.index.js"));
+    return c.find((p) => existsSync4(p)) ?? null;
   }
   async function commandFor(lang, root) {
     if (lang === "python") {
-      const entry = await setting("pyrightPath", "") || pyrightEntry() || (host.installPyright ? await host.installPyright() : null);
+      const entry = await setting("pyrightPath", "") || pyrightEntry() || await (host.installPyright ? host.installPyright() : installPyright(pyrightPrefix(), findNode(), host.log));
       if (!entry) throw new Error(`Kh\xF4ng t\xECm th\u1EA5y basedpyright/Pyright tr\xEAn m\xE1y ${process.platform}. C\xE0i (c\u1EA7n Node.js 18+ k\xE8m npm): npm i --prefix ${WIN3 ? '"%LOCALAPPDATA%\\orca-qt-lsp"' : "~/.local/share/orca-qt-lsp"} basedpyright@1.40.2`);
       const node = await setting("nodePath", "") || findNode();
       return { cmd: node, args: [entry, "--stdio"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, detail: entry.includes("basedpyright") ? "basedpyright" : "pyright" };
@@ -624,8 +677,8 @@ function createCore(host) {
       const args2 = [];
       const builds = findBuildDirs(root, "qml");
       for (const b of builds.slice(0, 1)) args2.push("-b", b);
-      const qmlDir = join3(dirname3(dirname3(qmlls)), "qml");
-      if (existsSync3(qmlDir)) args2.push("-I", qmlDir);
+      const qmlDir = join4(dirname4(dirname4(qmlls)), "qml");
+      if (existsSync4(qmlDir)) args2.push("-I", qmlDir);
       return { cmd: qmlls, args: args2, detail: builds[0] ? `build: ${builds[0].slice(root.length + 1) || "."}` : "ch\u01B0a c\xF3 th\u01B0 m\u1EE5c build (ch\u1EA1y CMake configure \u0111\u1EC3 qmlls th\u1EA5y module c\u1EE7a d\u1EF1 \xE1n)" };
     }
     const clangd = findClangd(await setting("clangdPath", ""));
@@ -648,6 +701,7 @@ function createCore(host) {
       host.log(`${lang} server exited (${code}) for ${root}`);
       if (servers.get(key(lang, root)) === srv) servers.delete(key(lang, root));
     };
+    const typeMode = String(await setting("typeCheckingMode", "off")).trim() || "off";
     if (lang === "python") {
       srv.interpreter = (await interpretersFor(root, file))[0] ?? null;
       host.log(`interpreter for ${root}: ${srv.interpreter ? `${srv.interpreter.path} [${srv.interpreter.source}]` : "none"}`);
@@ -657,7 +711,7 @@ function createCore(host) {
       const py = srv.interpreter?.path;
       if (it.section === "python") return py ? { pythonPath: py, defaultInterpreterPath: py } : {};
       if (it.section === "python.analysis" || it.section === "basedpyright.analysis") {
-        return { typeCheckingMode: "standard", diagnosticMode: "openFilesOnly", autoSearchPaths: true, useLibraryCodeForTypes: true, autoImportCompletions: true };
+        return { typeCheckingMode: typeMode, diagnosticMode: "openFilesOnly", autoSearchPaths: true, useLibraryCodeForTypes: true, autoImportCompletions: true };
       }
       return {};
     }));
@@ -977,10 +1031,67 @@ function createCore(host) {
 }
 
 // src/remote.ts
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync5 } from "node:fs";
 import { createInterface } from "node:readline";
+
+// src/probe-script.ts
+var PROBE_SCRIPT = String.raw`
+const fs=require('fs'),path=require('path'),os=require('os'),crypto=require('crypto');
+const A=JSON.parse(Buffer.from(Q,'base64').toString());
+const sizes=new Set(A.sizes),SK=new Set(A.skip),ext=new RegExp(A.ext,'i');
+const roots=[...A.hints,...A.roots];
+try{const st=JSON.parse(fs.readFileSync(path.join(os.homedir(),'.orca-qt-lsp','state.json'),'utf8'));roots.push(...(st.roots||[]))}catch{}
+const win=process.platform==='win32';
+try{const o=require('child_process').execSync(win?'orca.cmd worktree list --json':'orca worktree list --json',{encoding:'utf8',timeout:8000,stdio:['ignore','pipe','ignore'],maxBuffer:64<<20,windowsHide:true});
+ for(const w of (JSON.parse(o).result||{}).worktrees||[])if(!w.hostId||w.hostId==='local')roots.push(w.path)}catch{}
+roots.push(os.homedir());
+if(win){for(const d of 'CDEFGH')roots.push(d+':\\')}else{for(const d of ['/data','/srv','/opt','/workspace','/work','/projects'])roots.push(d)}
+const sha=f=>crypto.createHash('sha1').update(fs.readFileSync(f,'utf8').replace(/^﻿/,'').replace(/\r\n/g,'\n')).digest('hex');
+const t0=Date.now(),seen=new Set();
+for(const r of roots){if(!r||!fs.existsSync(r))continue;let level=[r];
+ for(let d=0;level.length&&d<=14;d++){const next=[];
+  for(const dir of level){if(seen.has(dir))continue;seen.add(dir);
+   if(Date.now()-t0>A.ms){console.log('QTLSP-NONE timeout');process.exit(0)}
+   let es;try{es=fs.readdirSync(dir,{withFileTypes:true})}catch{continue}
+   for(const e of es){const n=e.name;
+    if(e.isDirectory()){if(!SK.has(n)&&!n.startsWith('.')&&!/^(build|out|cmake-build-)/i.test(n))next.push(path.join(dir,n));continue}
+    if(!e.isFile()||!ext.test(n))continue;const f=path.join(dir,n);let s;try{s=fs.statSync(f).size}catch{continue}
+    if(sizes.has(s)){try{if(sha(f)===A.hash){console.log('QTLSP-FOUND '+JSON.stringify({path:f,root:r}));process.exit(0)}}catch{}}}}
+  level=next}}
+console.log('QTLSP-NONE');
+`;
+var EXT_RE = {
+  python: "\\.(py|pyi|pyw)$",
+  qml: "\\.qml$",
+  cpp: "\\.(cpp|cc|cxx|c|h|hpp|hh|hxx|inl|ipp)$"
+};
+var PROBE_SKIP = [
+  "node_modules",
+  "__pycache__",
+  "venv",
+  "env",
+  "dist",
+  "site-packages",
+  "Library",
+  "Applications",
+  "AppData",
+  "Movies",
+  "Music",
+  "Pictures",
+  "Downloads",
+  "$Recycle.Bin",
+  "Windows",
+  "Program Files",
+  "Program Files (x86)",
+  "ProgramData",
+  "snap",
+  "proc",
+  "sys"
+];
+
+// src/remote.ts
 var NODE_CANDIDATES = [
   (a) => ["node", a],
   (a) => ["/opt/homebrew/bin/node", a],
@@ -997,7 +1108,7 @@ function findSsh(setting) {
   if (setting) return setting;
   if (process.platform === "win32") {
     const sys = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\OpenSSH\\ssh.exe`;
-    if (existsSync4(sys)) return sys;
+    if (existsSync5(sys)) return sys;
   }
   return "ssh";
 }
@@ -1034,7 +1145,7 @@ var RemoteAgent = class {
   /** Chay mot lenh ngan qua SSH, gui `input` vao stdin roi dong. */
   run(cmd, input, timeoutMs = 6e4) {
     return new Promise((resolve5) => {
-      const p = spawn2(this.ssh, this.sshArgs(cmd), { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      const p = spawn3(this.ssh, this.sshArgs(cmd), { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
       let out = "", err = "";
       const t = setTimeout(() => {
         try {
@@ -1058,18 +1169,40 @@ var RemoteAgent = class {
       p.stdin.end(input);
     });
   }
+  nodeKnown = false;
+  nodeCandidates() {
+    if (this.nodeKnown) return [this.node];
+    const custom = String(this.settings.remoteNode ?? "").trim();
+    return custom ? [(a) => [custom, a], ...NODE_CANDIDATES] : NODE_CANDIDATES;
+  }
+  /** Do tim file tren may kia, chi doc (xem probe-script.ts). Nem loi neu khong SSH/khong chay duoc node. */
+  async probe(q) {
+    const script = `const Q=${JSON.stringify(Buffer.from(JSON.stringify(q)).toString("base64"))};${PROBE_SCRIPT}`;
+    let last = "";
+    for (const node of this.nodeCandidates()) {
+      const r = await this.run(node("-"), script, q.ms + 2e4);
+      const m = /QTLSP-FOUND (.+)/.exec(r.out);
+      if (m || r.out.includes("QTLSP-NONE")) {
+        this.node = node;
+        this.nodeKnown = true;
+        return m ? JSON.parse(m[1]) : null;
+      }
+      last = (r.err || r.out).trim().split("\n").pop()?.slice(0, 160) ?? String(r.code);
+      if (r.code === 255) break;
+    }
+    throw new Error(last || "kh\xF4ng ch\u1EA1y \u0111\u01B0\u1EE3c node");
+  }
   /** Chep agent sang may kia (neu chua co ban nay) va tim node dung duoc. */
   async install() {
     const b64 = Buffer.from(this.agentSource).toString("base64");
     const script = `const fs=require('fs'),path=require('path'),os=require('os');const d=path.join(os.homedir(),'.orca-qt-lsp');fs.mkdirSync(d,{recursive:true});const f=path.join(d,'agent-${this.version}.mjs');if(!fs.existsSync(f)){fs.writeFileSync(f+'.tmp',Buffer.from('${b64}','base64'));fs.renameSync(f+'.tmp',f)}for(const n of fs.readdirSync(d))if(/^agent-[0-9a-f]+\\.mjs$/.test(n)&&n!=='agent-${this.version}.mjs')try{fs.unlinkSync(path.join(d,n))}catch{}console.log('QTLSP-OK '+process.version+' '+process.platform)
 `;
     const tried = [];
-    const custom = String(this.settings.remoteNode ?? "").trim();
-    const candidates = custom ? [(a) => [custom, a], ...NODE_CANDIDATES] : NODE_CANDIDATES;
-    for (const node of candidates) {
+    for (const node of this.nodeCandidates()) {
       const r = await this.run(node("-"), script);
       if (r.out.includes("QTLSP-OK")) {
         this.node = node;
+        this.nodeKnown = true;
         this.log(`${this.host}: agent ${this.version} san sang (${r.out.trim().split(" ").slice(1).join(" ")}, ${node("").join(" ")})`);
         return;
       }
@@ -1085,7 +1218,7 @@ var RemoteAgent = class {
     if (this.starting) return this.starting;
     this.starting = (async () => {
       await this.install();
-      const p = spawn2(this.ssh, this.sshArgs(this.node(`.orca-qt-lsp/agent-${this.version}.mjs`)), { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      const p = spawn3(this.ssh, this.sshArgs(this.node(`.orca-qt-lsp/agent-${this.version}.mjs`)), { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
       this.proc = p;
       let errTail = "";
       p.stderr.on("data", (d) => {
@@ -1170,13 +1303,67 @@ var RemoteAgent = class {
 var WIN4 = process.platform === "win32";
 var norm2 = (p) => WIN4 ? p.toLowerCase() : p;
 var isLocal = (w) => !w.hostId || w.hostId === "local";
-var HERE = dirname4(fileURLToPath2(import.meta.url));
+var HERE = dirname5(fileURLToPath2(import.meta.url));
 var REMOTE_RE = /^@([^:]+):(.*)$/s;
 var tag = (host, p) => `@${host}:${p}`;
 var untag = (p) => {
   const m = REMOTE_RE.exec(p);
   return m ? { host: m[1], path: m[2] } : null;
 };
+var errText = (e) => e instanceof Error ? e.message : String(e);
+function sshConfigHosts(auto = false, configPath = join5(homedir3(), ".ssh", "config")) {
+  const blocks = [];
+  const read = (file, depth) => {
+    if (depth > 3 || !existsSync6(file)) return;
+    let text = "";
+    try {
+      text = readFileSync3(file, "utf8");
+    } catch {
+      return;
+    }
+    let cur = null;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.replace(/#.*/, "").trim();
+      const m = /^(\S+?)(?:\s*=\s*|\s+)(.+)$/.exec(line);
+      if (!m) continue;
+      const k = m[1].toLowerCase();
+      if (k === "host") {
+        cur = { names: m[2].split(/\s+/).filter(Boolean), opts: {} };
+        blocks.push(cur);
+        continue;
+      }
+      if (k === "match") {
+        cur = null;
+        continue;
+      }
+      if (k === "include") {
+        for (const v of m[2].split(/\s+/)) {
+          if (/[*?]/.test(v)) continue;
+          const p = v.replace(/^~/, homedir3());
+          read(/^([\\/]|[A-Za-z]:)/.test(p) ? p : join5(homedir3(), ".ssh", p), depth + 1);
+        }
+        continue;
+      }
+      if (cur && !(k in cur.opts)) cur.opts[k] = m[2].trim();
+    }
+  };
+  read(configPath, 0);
+  const out = [];
+  const seenTarget = /* @__PURE__ */ new Set();
+  for (const b of blocks) {
+    for (const n of b.names) {
+      if (/[*?!]/.test(n)) continue;
+      const hostName = (b.opts.hostname ?? n).toLowerCase();
+      if (/^(github\.com|gitlab\.com|bitbucket\.org|ssh\.dev\.azure\.com|ssh\.github\.com)$/.test(hostName)) continue;
+      if (auto && b.opts.proxycommand) continue;
+      const target = `${(b.opts.user ?? "").toLowerCase()}@${hostName}:${b.opts.port ?? "22"}|${b.opts.proxyjump ?? ""}`;
+      if (auto && seenTarget.has(target)) continue;
+      seenTarget.add(target);
+      out.push(n);
+    }
+  }
+  return [...new Set(out)];
+}
 function activate(orca) {
   const setting = async (k, fallback) => {
     try {
@@ -1219,12 +1406,27 @@ function activate(orca) {
   });
   const agents = /* @__PURE__ */ new Map();
   let agentSource = null;
-  const hostsSetting = async () => String(await setting("remoteHosts", "")).split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
-  async function agentFor(host) {
+  const cfg = { sshPath: "", remoteRoots: "", remoteNode: "" };
+  const loadCfg = async () => {
+    cfg.sshPath = String(await setting("sshPath", ""));
+    cfg.remoteRoots = String(await setting("remoteRoots", ""));
+    cfg.remoteNode = String(await setting("remoteNode", ""));
+  };
+  const cfgReady = loadCfg();
+  try {
+    orca.settings.onDidChange?.(() => {
+      void loadCfg();
+      for (const a of agents.values()) a.stop();
+      agents.clear();
+    });
+  } catch {
+  }
+  const extraHosts = async () => String(await setting("remoteHosts", "")).split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+  function remoteFor(host) {
     let a = agents.get(host);
     if (!a) {
-      agentSource ??= readFileSync3(join4(HERE, "agent.mjs"), "utf8");
-      a = new RemoteAgent(host, findSsh(await setting("sshPath", "")), agentSource, { remoteRoots: await setting("remoteRoots", ""), remoteNode: await setting("remoteNode", "") });
+      agentSource ??= readFileSync3(join5(HERE, "agent.mjs"), "utf8");
+      a = new RemoteAgent(host, findSsh(cfg.sshPath), agentSource, { remoteRoots: cfg.remoteRoots, remoteNode: cfg.remoteNode });
       a.log = (l) => orca.log(l);
       a.onEvent = (ev, p) => {
         if (p && typeof p.path === "string") p = { ...p, path: tag(host, p.path) };
@@ -1232,6 +1434,11 @@ function activate(orca) {
       };
       agents.set(host, a);
     }
+    return a;
+  }
+  async function agentFor(host) {
+    await cfgReady;
+    const a = remoteFor(host);
     await a.start();
     return a;
   }
@@ -1249,40 +1456,127 @@ function activate(orca) {
     }
     return v;
   };
-  async function attach(input) {
-    const res = await local.handlers["lsp.attach"](input);
-    if (res.path) return res;
-    const hosts = await hostsSetting();
-    if (!hosts.length) {
-      return { ...res, message: 'Kh\xF4ng t\xECm th\u1EA5y file n\xE0y tr\xEAn m\xE1y n\xE0y. N\u1EBFu file n\u1EB1m \u1EDF m\xE1y kh\xE1c (SSH, m\xE1y gh\xE9p n\u1ED1i): th\xEAm m\xE1y \u0111\xF3 v\xE0o Settings \u2192 Qt Code Intelligence \u2192 "Remote SSH hosts".' };
+  const PROJECT_HOSTS = "projectHosts";
+  const NO_PROJECT = "(kh\xF4ng c\xF3 workspace)";
+  async function projectKey() {
+    const ctx = await orca.host.call("workspace.readContext", {}).catch(() => null);
+    return ctx?.displayName || NO_PROJECT;
+  }
+  async function projectHosts() {
+    try {
+      const v = await orca.storage.get(PROJECT_HOSTS);
+      return v && typeof v === "object" ? { ...v } : {};
+    } catch {
+      return {};
     }
-    const hints = await remoteHints();
-    const errors = [];
-    for (const host of hosts) {
+  }
+  async function rememberHost(key2, host) {
+    const map = await projectHosts();
+    if (host) map[key2] = host;
+    else delete map[key2];
+    await orca.storage.set(PROJECT_HOSTS, map);
+  }
+  async function attachOn(host, input, hints) {
+    const a = await agentFor(host);
+    const r = await a.call("lsp.attach", { ...input, hints }, 12e4);
+    return r.path ? tagPaths(host, r) : r;
+  }
+  async function attach(input) {
+    await cfgReady;
+    const key2 = await projectKey();
+    const chosen = (await projectHosts())[key2];
+    if (chosen === "local") return local.handlers["lsp.attach"](input);
+    if (chosen) {
       try {
-        const a = await agentFor(host);
-        const r = await a.call("lsp.attach", { ...input, hints }, 12e4);
-        if (r.path) return tagPaths(host, r);
-        errors.push(`${host}: kh\xF4ng c\xF3`);
+        const r = await attachOn(chosen, input, await remoteHints());
+        if (r.path) return r;
+        await rememberHost(key2, null);
       } catch (e) {
-        errors.push(e instanceof Error ? e.message : String(e));
+        return { ok: false, path: null, candidates: 0, workspace: null, server: null, message: `${chosen}: ${errText(e)} \u2014 b\u1EA5m \u21C4 \u1EDF g\xF3c d\u01B0\u1EDBi \u0111\u1EC3 ch\u1ECDn m\xE1y kh\xE1c.` };
       }
     }
-    return { ...res, message: `Kh\xF4ng t\xECm th\u1EA5y file tr\xEAn m\xE1y n\xE0y v\xE0 tr\xEAn ${hosts.join(", ")} (${errors.join("; ")}). M\xE1y kia: th\xEAm th\u01B0 m\u1EE5c d\u1EF1 \xE1n v\xE0o "Remote project folders" n\u1EBFu kh\xF4ng ph\u1EA3i workspace Orca.` };
+    const res = await local.handlers["lsp.attach"](input);
+    if (res.path) return res;
+    const hosts = [.../* @__PURE__ */ new Set([...await extraHosts(), ...sshConfigHosts(true)])].slice(0, 40);
+    if (!hosts.length) {
+      return { ...res, message: "Kh\xF4ng t\xECm th\u1EA5y file tr\xEAn m\xE1y n\xE0y, v\xE0 ~/.ssh/config ch\u01B0a c\xF3 m\xE1y n\xE0o. N\u1EBFu code \u1EDF m\xE1y kh\xE1c: b\u1EA5m \u21C4 \u1EDF g\xF3c d\u01B0\u1EDBi, g\xF5 user@host." };
+    }
+    const hints = await remoteHints();
+    const sizes = [input.size, input.sizeCrlf].filter((s) => typeof s === "number").flatMap((s) => [s, s + 3]);
+    const roots = cfg.remoteRoots.split(/[;\n]/).map((s) => s.trim()).filter(Boolean);
+    const q = { hash: input.hash ?? "", sizes, ext: EXT_RE[input.language], hints, roots, skip: PROBE_SKIP, ms: 25e3 };
+    const errors = [];
+    const found = await new Promise((done) => {
+      let left = hosts.length;
+      let settled = false;
+      for (const host of hosts) {
+        void remoteFor(host).probe(q).then(
+          (hit) => {
+            if (hit && !settled) {
+              settled = true;
+              done({ host, root: hit.root });
+            } else if (!hit) errors.push(`${host}: kh\xF4ng c\xF3`);
+          },
+          (e) => {
+            errors.push(`${host}: ${errText(e).slice(0, 80)}`);
+          }
+        ).finally(() => {
+          if (--left === 0 && !settled) {
+            settled = true;
+            done(null);
+          }
+        });
+      }
+    });
+    if (found) {
+      orca.log(`project "${key2}" -> ${found.host} (t\u1EF1 t\xECm th\u1EA5y trong ${found.root})`);
+      try {
+        const r = await attachOn(found.host, input, [found.root, ...hints]);
+        if (r.path) {
+          if (key2 !== NO_PROJECT) await rememberHost(key2, found.host);
+          return r;
+        }
+      } catch (e) {
+        return { ...res, message: `T\xECm th\u1EA5y file tr\xEAn ${found.host} nh\u01B0ng kh\xF4ng ch\u1EA1y \u0111\u01B0\u1EE3c agent: ${errText(e)}` };
+      }
+    }
+    orca.log(`attach miss on ${hosts.length} hosts: ${errors.join("; ")}`);
+    return { ...res, message: `Kh\xF4ng t\xECm th\u1EA5y file tr\xEAn m\xE1y n\xE0y v\xE0 ${hosts.length} m\xE1y SSH (${errors.slice(0, 3).join("; ")}${errors.length > 3 ? "\u2026" : ""}). B\u1EA5m \u21C4 \u1EDF g\xF3c d\u01B0\u1EDBi \u0111\u1EC3 ch\u1ECDn m\xE1y.` };
   }
   const route = (name) => async (input) => {
     const target = input && typeof input.path === "string" ? untag(input.path) : null;
     if (!target) return local.handlers[name](input);
-    const a = await agentFor(target.host);
     if (name === "lsp.reveal") return { opened: false, reason: "remote" };
+    const a = await agentFor(target.host);
     const out = tagPaths(target.host, await a.call(name, { ...input, path: target.path }));
     if (name === "lsp.definition" && out?.locations) for (const l of out.locations) l.inWorkspace = false;
     return out;
   };
   orca.panels.handle("lsp.attach", (input) => attach(input));
   for (const name of Object.keys(local.handlers)) if (name !== "lsp.attach") orca.panels.handle(name, route(name));
+  orca.panels.handle("lsp.hostChoice", async () => {
+    const key2 = await projectKey();
+    const map = await projectHosts();
+    const hosts = [.../* @__PURE__ */ new Set([...await extraHosts(), ...Object.values(map).filter((h) => h !== "local"), ...sshConfigHosts(false)])];
+    return { project: key2, chosen: map[key2] ?? null, hosts };
+  });
+  orca.panels.handle("lsp.setHost", async (input) => {
+    const host = (input?.host ?? "").trim() || null;
+    const key2 = await projectKey();
+    await rememberHost(key2, host);
+    orca.log(`project "${key2}" -> ${host ?? "t\u1EF1 \u0111\u1ED9ng"} (ch\u1ECDn tay)`);
+    if (host && host !== "local") {
+      try {
+        const a = await agentFor(host);
+        return { project: key2, chosen: host, ok: true, info: a.info };
+      } catch (e) {
+        return { project: key2, chosen: host, ok: false, error: errText(e) };
+      }
+    }
+    return { project: key2, chosen: host, ok: true };
+  });
   orca.panels.handle("lsp.remoteStatus", async () => ({
-    hosts: await hostsSetting(),
+    projects: await projectHosts(),
     agents: [...agents.values()].map((a) => ({ host: a.host, alive: a.alive, info: a.info, error: a.lastError }))
   }));
   orca.events.on("workspace.removed", ({ path }) => local.workspaceRemoved(path));
@@ -1291,5 +1585,6 @@ function deactivate() {
 }
 export {
   deactivate,
-  activate as default
+  activate as default,
+  sshConfigHosts
 };

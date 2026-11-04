@@ -23,7 +23,7 @@ trong trình soạn thảo thường của Orca.
 | --- | --- | --- |
 | Orca ≥ 1.4.248, đã bật plugin (Settings → Plugins → Turn on plugins) | Tất cả | |
 | Git đã đăng nhập GitHub, có quyền đọc `tungvu-vms/orca-qt-pack` | Tải marketplace | Được mời làm collaborator; `gh auth login` hoặc Git Credential Manager |
-| Node.js ≥ 20 trên PATH | Python (LSP) | https://nodejs.org |
+| Node.js ≥ 20 trên PATH | Python (LSP) | https://nodejs.org (basedpyright tự cài lần đầu mở file Python) |
 | basedpyright | Python (LSP) | Windows: `npm i --prefix "%LOCALAPPDATA%\orca-qt-lsp" basedpyright@1.40.2` · macOS/Linux: `npm i --prefix ~/.local/share/orca-qt-lsp basedpyright@1.40.2` |
 | Qt ≥ 6.5 (có `qmlls`) dưới `C:\Qt` hoặc `~/Qt` | QML (LSP), Qt Tools | Qt Online Installer (hoặc đặt *Qt bin folder*) |
 | clangd | C++ (LSP) | Có sẵn khi cài **Qt Creator** (`C:\Qt\Tools\QtCreator\bin\clang\bin`), hoặc LLVM; macOS: Xcode Command Line Tools; Linux: `apt install clangd` |
@@ -71,29 +71,38 @@ Node.js, Qt bin folder, qmlls, clangd. Để trống là tự tìm.
 Interpreter Python được chọn theo thứ tự của VS Code: đã chọn tay → `.vscode/settings.json` →
 `pyrightconfig`/`pyproject` → venv của dự án (venv ngay trong dự án, bản Python cao nhất) → Python cài đặt bản cao nhất.
 
-### Code nằm ở máy khác (SSH, máy ghép nối) — từ 0.3.0
+### Code nằm ở máy khác (SSH, máy ghép nối) — tự động
 
 Plugin chạy trên máy đang mở Orca và chỉ đọc được ổ đĩa máy đó. Khi file mở trong Orca nằm ở máy khác
-(workspace SSH, máy ghép nối qua Orca, ví dụ MacBook xem code của PC Windows), plugin chạy một **agent** trên máy kia
-qua lệnh `ssh` của hệ thống: Pyright/qmlls/clangd chạy ngay trên máy có code, dùng venv và build của máy đó.
+(workspace SSH, máy ghép nối qua Orca, ví dụ MacBook xem code của PC Windows), plugin tự làm:
 
-Cài một lần:
+1. Không thấy file trên máy này → dò **mọi máy trong `~/.ssh/config`** cùng lúc bằng một script chỉ đọc (không cài gì).
+   Bỏ qua máy Git (github…), máy đi qua ProxyCommand, alias trùng máy; máy cần mật khẩu hoặc đang tắt thì bỏ qua.
+2. Máy nào có file → chép agent sang `~/.orca-qt-lsp` của máy đó, tự cài basedpyright nếu thiếu, chạy
+   Pyright/qmlls/clangd ngay trên máy có code (dùng venv và build của máy đó).
+3. **Nhớ máy cho từng dự án** (theo workspace Orca): lần sau vào thẳng, khoảng 1–2 giây. Máy cũ không còn file thì tự dò lại.
 
-1. Settings → Qt Code Intelligence → **Remote SSH hosts**: tên máy trong `~/.ssh/config` hoặc `user@host`
-   (nhiều máy cách nhau dấu phẩy). Ví dụ `my-pc`, `gps@user@server`.
-2. Từ máy đang mở Orca phải SSH được **bằng khóa, không hỏi mật khẩu**: chạy `ssh <máy>` một lần trong terminal để
-   chấp nhận host key. Thử: `ssh -o BatchMode=yes <máy> echo ok`.
-3. Máy kia cần **Node.js ≥ 18**. Tìm được node trên PATH, Homebrew, `/usr/bin`, nvm, fnm, volta, asdf; nếu ở chỗ khác
-   thì đặt **Remote node path**. Agent tự chép sang `~/.orca-qt-lsp` và tự cài basedpyright (npm) nếu chưa có.
-   QML/C++ cần qmlls/clangd cài trên máy kia.
+Nút **⇄** ở góc dưới bên trái của editor hiện máy đang dùng; bấm để chọn *Tự động*, *Máy này*, một máy trong
+`~/.ssh/config`, hoặc gõ `user@host` cho dự án đó.
 
-Agent tìm file trong: workspace Orca đã biết của máy kia, thư mục dự án đã dùng, **Remote project folders**,
-workspace của Orca cài trên máy kia (nếu có), rồi thư mục home. Thanh trạng thái hiện `🖧 <máy>` khi file ở máy khác.
+Điều kiện (một lần cho mỗi máy kia):
+- Từ máy đang mở Orca SSH được **bằng khóa, không hỏi mật khẩu** (đã chấp nhận host key). Thử: `ssh -o BatchMode=yes <máy> echo ok`.
+- Máy kia có **Node.js ≥ 18**: tìm trên PATH, Homebrew, `/usr/bin`, nvm, fnm, volta, asdf, shell đăng nhập; chỗ khác thì đặt
+  *Remote node path*. QML/C++ cần qmlls/clangd trên máy kia. Máy Windows làm máy kia cần bật OpenSSH Server.
 
-Hạn chế: Ctrl+Click sang file khác ở máy kia mở khung xem nhanh (peek), không mở tab Orca. Lần đầu mở file chậm vài
-giây (kết nối SSH + khởi động Pyright). Máy Windows làm máy kia cần bật OpenSSH Server.
-Đã kiểm chứng 04/11/2026: MacBook → PC Windows (`C:/path/to/project/app.py`, venv của dự án), PC Windows → Ubuntu
-(node qua nvm, basedpyright tự cài), máy Linux không có Node (báo lỗi rõ ràng).
+Agent tìm file trong: workspace Orca của máy kia (nếu có Orca), thư mục đã dùng, *Remote project folders*, thư mục home,
+rồi các ổ đĩa (Windows) hoặc `/data`, `/srv`, `/opt`… (Linux).
+
+Hạn chế: Ctrl+Click sang file khác ở máy kia mở khung xem nhanh (peek), không mở tab Orca (Orca chưa cho plugin mở tab
+file máy khác).
+
+Đã kiểm chứng 04/11/2026: MacBook → PC Windows (`C:/path/to/project/app.py`, không điền gì: tự tìm 3,3 s, lần sau 1,6 s,
+venv của dự án), PC Windows → Ubuntu (node qua nvm, basedpyright tự cài), máy Linux không có Node (báo lỗi rõ).
+
+### Kiểm tra kiểu Python
+
+Mặc định **off** như Pylance của VS Code: chỉ báo lỗi cú pháp và import không tìm thấy. Muốn chặt hơn: Settings →
+*Python type checking* = `basic` / `standard` / `strict`.
 
 ## Phát triển
 
