@@ -1,0 +1,226 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-catalog.v2.schema.json",
+  "catalogVersion": 2,
+  "name": "Qt Developer Pack (team)",
+  "owner": "tungvu-vms",
+  "plugins": [
+    {
+      "id": "tungvu-vms.qt-dev-icons",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/tungvu-vms/orca-qt-pack.git",
+        "ref": "main",
+        "path": "plugins/qt-icons"
+      },
+      "description": "Material file icons plus Qt icons for QML, Designer forms, resources, style sheets, qmldir, QDoc and PySide6 deploy specs, with icons for common Qt project folders.",
+      "categories": [
+        "icons"
+      ],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "commit": "47d58e18f978a706cebfd0598316d3dd1f5a1d14",
+          "contentHash": "11282a278b0dbd303122e577a49c368e0aad24e2c0c1ea3b0da7de47aaef73b5",
+          "execution": "data",
+          "minimumOrca": "1.4.246",
+          "name": "Qt Developer Icons",
+          "contributes": [
+            {
+              "kind": "iconThemes",
+              "name": "Qt Developer Icons"
+            },
+            {
+              "kind": "iconThemes",
+              "name": "Qt Developer Icons (Light)"
+            }
+          ],
+          "license": "MIT AND LGPL-3.0-only"
+        }
+      ]
+    },
+    {
+      "id": "tungvu-vms.qt-dev-syntax",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/tungvu-vms/orca-qt-pack.git",
+        "ref": "main",
+        "path": "plugins/qt-syntax"
+      },
+      "description": "Highlighting for Qt project files: Qt Style Sheets, resources, Designer forms, Linguist translations, qmake, CMake modules, PySide6 deploy specs and pip requirements.",
+      "categories": [
+        "languages"
+      ],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "commit": "47d58e18f978a706cebfd0598316d3dd1f5a1d14",
+          "contentHash": "483fbbe82cde86e6bd9610ad483988c2cfced449a76960ee659cf3ee6523dbc6",
+          "execution": "data",
+          "minimumOrca": "1.4.246",
+          "name": "Qt Developer Syntax",
+          "contributes": [
+            {
+              "kind": "syntaxes",
+              "name": "Qt Style Sheet",
+              "detail": ".qss"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "Qt Resource Collection",
+              "detail": ".qrc, .qrc.cmakein"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "Qt Designer Form",
+              "detail": ".ui"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "Qt Linguist Translation"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "Qt Diagnostic Trace",
+              "detail": ".qtd"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "QDoc",
+              "detail": ".qdoc, .qdocconf, .qdocinc"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "PySide6 Deploy Spec",
+              "detail": "pysidedeploy.spec"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "qmake Project",
+              "detail": ".pro, .pri, .prf, .prl, .qmake.conf, .qmake.stash, qmake.conf"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "CMake",
+              "detail": ".cmake, .cmake.in"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "CMake Cache",
+              "detail": "CMakeCache.txt"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "pip Requirements",
+              "detail": "requirements.txt, requirements-dev.txt, requirements.in, constraints.txt"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "XML grammar dependency"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "INI grammar dependency"
+            },
+            {
+              "kind": "syntaxes",
+              "name": "Java grammar dependency"
+            }
+          ],
+          "fileTypes": [
+            "qss",
+            "qrc",
+            "ui",
+            "qtd",
+            "qdoc",
+            "qdocconf",
+            "qdocinc",
+            "pro",
+            "pri",
+            "prf",
+            "prl",
+            "cmake"
+          ],
+          "license": "LGPL-3.0-only AND MIT"
+        }
+      ]
+    },
+    {
+      "id": "tungvu-vms.qt-dev-tools",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/tungvu-vms/orca-qt-pack.git",
+        "ref": "main",
+        "path": "plugins/qt-tools"
+      },
+      "description": "Qt, QML, PySide6 and PyQt tools in Orca: a panel that finds the project's .ui, .qrc, .qml and .ts files and runs Designer, uic, rcc, qmllint, lupdate/lrelease, CMake and qmake in a workspace terminal, plus qmlformat on save.",
+      "categories": [
+        "commands-panels"
+      ],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "commit": "47d58e18f978a706cebfd0598316d3dd1f5a1d14",
+          "contentHash": "eed8b107058efdf9960f62448274c7f298726e3e4b32708becf92de8058c09b2",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Qt Developer Tools",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Qt Tools"
+            },
+            {
+              "kind": "commands",
+              "name": "Qt: Open Designer"
+            },
+            {
+              "kind": "commands",
+              "name": "Qt: CMake configure (build/)"
+            },
+            {
+              "kind": "commands",
+              "name": "Qt: CMake build"
+            },
+            {
+              "kind": "commands",
+              "name": "Qt: Lint all QML files"
+            },
+            {
+              "kind": "commands",
+              "name": "Qt: Compile all .ui files to Python"
+            },
+            {
+              "kind": "commands",
+              "name": "Qt: Compile all .qrc files to Python"
+            },
+            {
+              "kind": "commands",
+              "name": "Qt: Update translations (lupdate)"
+            },
+            {
+              "kind": "commands",
+              "name": "Qt: Check toolchain"
+            },
+            {
+              "kind": "hooks",
+              "name": "editor.save.before"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+Shift+B",
+              "detail": "qt.cmake.build"
+            }
+          ],
+          "capabilities": [
+            "workspace:read",
+            "workspace:write",
+            "terminal:send",
+            "notifications:show",
+            "settings:own"
+          ],
+          "license": "MIT"
+        }
+      ]
+    }
+  ]
+}
