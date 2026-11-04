@@ -1,4 +1,4 @@
-// Chay worker nhu Orca: kiem tra no khoi dong, quet workspace va xu ly hook luu QML.
+// Runs the worker the way Orca does: checks that it starts, scans the workspace and handles the QML save hook.
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import * as main from './worker.ts'
 

@@ -1,6 +1,8 @@
-# Kiem tra worker LSP that trong Orca cho QML (qmlls) va C++ (clangd) tren samples/qt-quick-app.
+# Tests the real LSP worker in Orca for QML (qmlls) and C++ (clangd) on samples/qt-quick-app.
+# Usage: pwsh lsp-build/dev/e2e-qt.ps1   (plugin loaded with `orca plugin dev`; run make-qt-sample.ps1 first; output in %TEMP%\lsp-e2e-qt.txt)
+$repo = Resolve-Path "$PSScriptRoot\..\.."
 $key = 'local.qt-dev-python-lsp'
-$root = '<repo>\samples\qt-quick-app'
+$root = Join-Path $repo 'samples\qt-quick-app'
 $out = "$env:TEMP\lsp-e2e-qt.txt"
 '' | Set-Content $out
 function Req($name, $obj, $t = 90000) {

@@ -1,5 +1,5 @@
 * text=auto eol=lf
 *.png binary
 *.webp binary
-# Script PowerShell co tieng Viet: luu UTF-8 co BOM de Windows PowerShell 5.1 doc dung
+# PowerShell scripts with non-ASCII text are saved as UTF-8 with BOM so Windows PowerShell 5.1 reads them correctly
 *.ps1 text eol=lf

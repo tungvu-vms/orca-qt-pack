@@ -1,4 +1,4 @@
-// Logic thuan (khong goi Orca): tim cong cu Qt, quet file, dung dong lenh.
+// Pure logic (no Orca calls): find Qt tools, scan files, build command lines.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, delimiter, extname, basename, relative, sep } from 'node:path'
 import type { QtAction, QtFile, QtFileKind } from './protocol'
@@ -9,7 +9,7 @@ const EXE = IS_WIN ? '.exe' : ''
 export const TOOL_NAMES = ['designer', 'uic', 'rcc', 'qmllint', 'qmlformat', 'qml', 'lupdate', 'lrelease', 'linguist', 'qmake', 'cmake'] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 
-/** Tim mot cong cu: uu tien thu muc Qt bin trong setting, sau do PATH, sau do C:\Qt\<ban moi nhat>\*\bin. */
+/** Finds a tool: the Qt bin folder from settings first, then PATH, then C:\Qt\<newest version>\*\bin. */
 export function findTool(name: string, qtBin: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const candidates: string[] = []
   if (qtBin) candidates.push(qtBin)
@@ -39,7 +39,7 @@ function defaultQtBins(): string[] {
   return out
 }
 
-/** Python cua workspace: .venv/venv neu co. */
+/** The workspace's Python: .venv/venv if present. */
 export function findPython(root: string, configured: string): string | null {
   if (configured) return configured
   for (const v of ['.venv', 'venv', 'env']) {
@@ -54,7 +54,7 @@ const KIND_BY_EXT: Record<string, QtFileKind> = {
 }
 const SKIP_DIRS = new Set(['node_modules', '.git', 'build', 'dist', '__pycache__', '.venv', 'venv', 'env', '.orca', 'out', '.idea', '.vscode', 'site-packages'])
 
-/** Quet file Qt trong workspace (gioi han so file va do sau). .ts chi tinh khi la file Linguist (<TS ...>). */
+/** Scans the workspace for Qt files (limited file count and depth). A .ts file counts only if it is a Linguist file (<TS ...>). */
 export function scanProject(root: string, limit = 400): { files: QtFile[]; truncated: boolean } {
   const files: QtFile[] = []
   let truncated = false
@@ -88,16 +88,18 @@ function head(file: string, bytes = 4096): string {
   try { return readFileSync(file, 'utf8').slice(0, bytes) } catch { return '' }
 }
 function isLinguistTs(file: string): boolean { return /<TS[\s>]/.test(head(file, 512)) }
-/** Chi liet ke file .py la diem vao cua app Qt (main.py / co QApplication). */
+/** Lists only .py files that are Qt app entry points (main.py / contains QApplication). */
 function isQtEntry(file: string): boolean {
   const n = basename(file).toLowerCase()
   if (n === 'main.py' || n === '__main__.py' || n === 'app.py') return true
   return /\bQ(Gui)?Application\s*\(/.test(head(file, 16384))
 }
 
-/** Bao mot doi so cho shell (PowerShell tren Windows, sh noi khac). */
+/** Quotes one argument for the terminal's shell (PowerShell on Windows, sh elsewhere).
+ *  PowerShell treats the typographic quotes ‘ ’ ‚ ‛ as single quotes too, so they are doubled as well;
+ *  anything outside a plain safe set is always quoted. */
 export function q(arg: string): string {
-  if (IS_WIN) return /[\s'"`$&|<>(){};,]/.test(arg) ? `'${arg.replace(/'/g, "''")}'` : arg
+  if (IS_WIN) return /^[A-Za-z0-9_.\\/:=+-]+$/.test(arg) ? arg : `'${arg.replace(/['‘’‚‛]/g, (c) => c + c)}'`
   return /[^A-Za-z0-9_./:=+-]/.test(arg) ? `'${arg.replace(/'/g, `'\\''`)}'` : arg
 }
 const call = (exe: string) => (IS_WIN ? `& ${q(exe)}` : q(exe))
@@ -116,18 +118,18 @@ export class ToolMissing extends Error {}
 
 function need(ctx: CommandContext, tool: ToolName): string {
   const t = ctx.tools[tool]
-  if (!t) throw new ToolMissing(`Không tìm thấy ${tool}. Đặt "Qt bin folder" trong Settings của plugin, hoặc thêm Qt vào PATH.`)
+  if (!t) throw new ToolMissing(`${tool} not found. Set "Qt bin folder" in the plugin settings, or add Qt to PATH.`)
   return t
 }
 function needPath(ctx: CommandContext): string {
-  if (!ctx.path) throw new Error('Thiếu file')
+  if (!ctx.path) throw new Error('No file given')
   return ctx.path
 }
 function stem(p: string) { return p.replace(/\.[^./]+$/, '') }
 function dirOf(p: string) { const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i + 1) }
 function pyModule(binding: string) { return binding === 'pyqt6' ? 'PyQt6' : binding === 'pyqt5' ? 'PyQt5' : 'PySide6' }
 
-/** Dung dong lenh cho mot hanh dong. Tra ve null neu hanh dong khong can terminal (vd mo file). */
+/** Builds the command line for an action. Returns null if the action needs no terminal (e.g. opening a file). */
 export function buildCommand(action: QtAction, ctx: CommandContext): string | null {
   const py = ctx.python ?? 'python'
   switch (action) {
@@ -146,7 +148,7 @@ export function buildCommand(action: QtAction, ctx: CommandContext): string | nu
       const out = dirOf(p) + basename(stem(p)) + '_rc.py'
       if (ctx.binding === 'pyside6') return `${call(need(ctx, 'rcc'))} -g python ${q(p)} -o ${q(out)}`
       if (ctx.binding === 'pyqt5') return `${call(py)} -m PyQt5.pyrcc_main ${q(p)} -o ${q(out)}`
-      // PyQt6 khong co rcc: dung rcc cua Qt sinh python roi doi import
+      // PyQt6 has no rcc: use Qt's rcc to generate Python, then adjust the import
       return `${call(need(ctx, 'rcc'))} -g python ${q(p)} -o ${q(out)}`
     }
     case 'qmllint': return `${call(need(ctx, 'qmllint'))} ${q(needPath(ctx))}`

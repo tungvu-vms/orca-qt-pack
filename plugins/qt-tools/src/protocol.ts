@@ -1,11 +1,11 @@
-// Hop dong panel <-> worker.
+// Panel <-> worker contract.
 export {}
 
 export type QtFileKind = 'ui' | 'qrc' | 'qml' | 'ts' | 'pro' | 'cmake' | 'py'
 
 export interface QtFile {
   kind: QtFileKind
-  /** Duong dan tuong doi trong workspace, dung dau '/' */
+  /** Path relative to the workspace root, using '/' separators */
   path: string
 }
 

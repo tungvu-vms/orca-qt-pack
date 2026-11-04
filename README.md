@@ -1,148 +1,158 @@
-# Qt Developer Pack cho Orca
+# Qt Developer Pack for Orca
 
-Bộ 4 plugin Orca cho dev Qt / QML / PySide6 / PyQt (Python và C++). Dùng nội bộ trong team,
-**repo private, không đăng lên danh mục công khai của Orca**.
+Four [Orca](https://github.com/stablyai/orca) plugins for Qt / QML / PySide6 / PyQt developers working in Python and C++.
 
-| Plugin | Loại | Cần duyệt quyền | Nội dung |
+| Plugin | Kind | Asks for approval | What it does |
 | --- | --- | --- | --- |
-| **Qt Developer Syntax** (`qt-dev-syntax`) | `data` | Không | Tô màu `.qss`, `.qrc`, `.ui`, `.qtd`, `.qdoc`, `pysidedeploy.spec`, qmake (`.pro/.pri/.prf`), `.cmake`, `CMakeCache.txt`, `requirements.txt` |
-| **Qt Developer Icons** (`qt-dev-icons`) | `data` | Không | Icon Material (~470 loại file) + icon Qt cho `.qml`, `.ui`, `.qrc`, `.qss`, `qmldir`, QDoc, PySide6 deploy; icon thư mục `qml/`, `ui/`, `resources/`, `translations/`… Có bản sáng và tối |
-| **Qt Developer Tools** (`qt-dev-tools`) | `trusted-worker` | **Có** | Panel "Qt Tools" liệt kê file Qt của workspace với nút Designer / uic / rcc / qmllint / Preview / Format / Linguist / lrelease / CMake configure + build / qmake / Run; 8 lệnh trong Command Palette; `qmlformat` tự chạy khi lưu `.qml`; phím tắt `Ctrl+Shift+B` = CMake build |
-| **Qt Code Intelligence** (`qt-dev-python-lsp`) | `trusted-worker` | **Có** | Chế độ xem **Python (LSP)**, **QML (LSP)**, **C++ (LSP)** kiểu VS Code: Ctrl+Click / F12 tới định nghĩa (import, hàm, biến, lớp Qt), rê chuột xem kiểu/tài liệu, gợi ý code, báo lỗi, tô màu theo nghĩa. Python tự chọn interpreter như VS Code |
+| **Qt Developer Syntax** (`qt-dev-syntax`) | `data` | No | Highlighting for `.qss`, `.qrc`, `.ui`, `.qtd`, `.qdoc`, `pysidedeploy.spec`, qmake (`.pro/.pri/.prf`), `.cmake`, `CMakeCache.txt`, `requirements.txt` |
+| **Qt Developer Icons** (`qt-dev-icons`) | `data` | No | Material file icons (~470 file types) plus Qt icons for `.qml`, `.ui`, `.qrc`, `.qss`, `qmldir`, QDoc and PySide6 deploy specs; folder icons for `qml/`, `ui/`, `resources/`, `translations/`… Light and dark variants |
+| **Qt Developer Tools** (`qt-dev-tools`) | `trusted-worker` | **Yes** | A "Qt Tools" panel listing the workspace's Qt files with Designer / uic / rcc / qmllint / Preview / Format / Linguist / lrelease / CMake configure + build / qmake / Run buttons; 8 Command Palette commands; `qmlformat` on save; `Ctrl+Shift+B` runs CMake build |
+| **Qt Code Intelligence** (`qt-dev-python-lsp`) | `trusted-worker` | **Yes** | VS Code-style **Python (LSP)**, **QML (LSP)** and **C++ (LSP)** editor views: Ctrl+Click / F12 to go to definition (imports, functions, variables, Qt classes), hover, completion, diagnostics and semantic colors. Picks the project's Python interpreter like VS Code. Also works on files that live on another machine, over SSH |
 
-**Cài kèm:** plugin chính thức **QML Syntax** (`stablyai.orca-qml`) từ Settings → Plugins để tô màu `.qml` và `qmldir`
-trong trình soạn thảo thường của Orca.
+Also install the official **QML Syntax** plugin (`stablyai.orca-qml`) from Settings → Plugins to get `.qml` and `qmldir`
+highlighting in Orca's regular editor.
 
-![Panel Qt Tools](docs/panel-files.png)
+![Qt Tools panel](docs/panel-files.png)
 
-## Cài cho thành viên team
+## Install
 
-### 1. Yêu cầu trên máy
+### 1. Requirements
 
-| Cần | Dùng cho | Cài thế nào |
+| Needed | For | How |
 | --- | --- | --- |
-| Orca ≥ 1.4.248, đã bật plugin (Settings → Plugins → Turn on plugins) | Tất cả | |
-| Git đã đăng nhập GitHub, có quyền đọc `tungvu-vms/orca-qt-pack` | Tải marketplace | Được mời làm collaborator; `gh auth login` hoặc Git Credential Manager |
-| Node.js ≥ 20 trên PATH | Python (LSP) | https://nodejs.org (basedpyright tự cài lần đầu mở file Python) |
-| basedpyright | Python (LSP) | Windows: `npm i --prefix "%LOCALAPPDATA%\orca-qt-lsp" basedpyright@1.40.2` · macOS/Linux: `npm i --prefix ~/.local/share/orca-qt-lsp basedpyright@1.40.2` |
-| Qt ≥ 6.5 (có `qmlls`) dưới `C:\Qt` hoặc `~/Qt` | QML (LSP), Qt Tools | Qt Online Installer (hoặc đặt *Qt bin folder*) |
-| clangd | C++ (LSP) | Có sẵn khi cài **Qt Creator** (`C:\Qt\Tools\QtCreator\bin\clang\bin`), hoặc LLVM; macOS: Xcode Command Line Tools; Linux: `apt install clangd` |
-| OpenSSH client + khóa SSH tới máy kia; Node.js ≥ 18 trên máy kia | Code ở máy khác (tùy chọn) | Xem mục *Code nằm ở máy khác* |
-| `compile_commands.json` trong thư mục build | C++ (LSP) | CMake configure với `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (nút *Configure* của Qt Tools đã bật sẵn) |
+| Orca ≥ 1.4.248 with plugins turned on (Settings → Plugins) | Everything | |
+| Node.js ≥ 20 | Python (LSP) | https://nodejs.org — basedpyright installs itself the first time a Python file is opened |
+| Qt ≥ 6.5 (with `qmlls`) under `C:\Qt` or `~/Qt` | QML (LSP), Qt Tools | Qt Online Installer, or set *Qt bin folder* |
+| clangd | C++ (LSP) | Ships with **Qt Creator** (`C:\Qt\Tools\QtCreator\bin\clang\bin`) or LLVM; macOS: Xcode Command Line Tools; Linux: `apt install clangd` |
+| `compile_commands.json` in the build folder | C++ (LSP) | CMake configure with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (Qt Tools' *Configure* button sets it) |
+| OpenSSH client, key login to the other machine, Node.js ≥ 18 there | Code on another machine (optional) | See [Code on another machine](#code-on-another-machine-ssh) |
 
-**Kiểm tra nhanh:** clone repo (hoặc tải file `setup/install-prereqs.ps1`) rồi chạy
-`powershell -ExecutionPolicy Bypass -File setup\install-prereqs.ps1`. Script kiểm tra Orca, git + quyền đọc repo, Node,
-tự cài basedpyright, và báo thiếu Qt/clangd.
+On Windows, `setup/install-prereqs.ps1` checks all of this and installs basedpyright:
+`powershell -ExecutionPolicy Bypass -File setup\install-prereqs.ps1`
 
-### 2. Cài plugin
+### 2. Add the catalog and install
 
-1. **Đăng nhập GitHub cho git trước.** Orca tải marketplace bằng `git` và **không hiện hộp đăng nhập**: chưa đăng nhập thì
-   catalog báo lỗi không đọc được repo. Cách nhanh: chạy một lần
-   `git ls-remote https://github.com/tungvu-vms/orca-qt-pack.git` trong terminal → Git Credential Manager mở trình duyệt
-   đăng nhập GitHub (tài khoản đã được mời vào repo).
-2. Orca → **Settings → Plugins → Catalog sources** → thêm Git URL
-   `https://github.com/tungvu-vms/orca-qt-pack.git`, Git ref `main`.
-   Hoặc bấm link (Orca hỏi thêm catalog rồi mở trang plugin):
+1. Orca → **Settings → Plugins → Add plugin → catalog**, URL `https://github.com/tungvu-vms/orca-qt-pack.git`, ref `main`.
+   Or open this link and let Orca add the catalog:
    `orca://plugins/tungvu-vms.qt-dev-python-lsp?catalog=https://github.com/tungvu-vms/orca-qt-pack.git`
-3. Trong catalog "Qt Developer Pack (team)", cài các plugin cần dùng.
-4. Plugin `trusted-worker` (Qt Tools, Code Intelligence) sẽ hỏi duyệt quyền. Duyệt thì mới chạy.
-5. **Settings → Appearance → Icon theme** → *Qt Developer Icons* (hoặc bản Light).
+2. Install the plugins you want from the **Qt Developer Pack** catalog.
+3. The two `trusted-worker` plugins (Qt Tools, Code Intelligence) run their own code with your user's access, so Orca
+   asks you to approve them. Read [Security](#security) first.
+4. **Settings → Appearance → Icon theme** → *Qt Developer Icons* (or the Light variant).
 
-Đã kiểm chứng 04/11/2026 trên máy Windows 11 sạch (VM `test-vm`): Orca 1.4.248 tải catalog private, cài đủ 4 plugin,
-2 plugin `trusted-worker` chạy sau khi duyệt.
+Orca checks the catalog for updates by itself; Settings → Plugins → ↻ checks now.
 
-### 3. Dùng
+### 3. Use
 
-- **Qt Tools:** icon cờ lê ở thanh bên phải.
-- **Code Intelligence:** mở file `.py` / `.qml` / `.cpp` / `.h`, ở chỗ chuyển chế độ xem cạnh **Source** chọn
-  **Python (LSP)** / **QML (LSP)** / **C++ (LSP)**.
-  - Thanh dưới: trạng thái server, số lỗi. Nút 🐍 (Python) đổi interpreter; nút ⚙ (QML/C++) khởi động lại server
-    (bấm sau khi chạy CMake configure lần đầu).
-  - Ctrl+Click sang file khác mở tab Orca ở **đầu file** (Orca chưa cho plugin chọn dòng); thanh trạng thái báo dòng.
+- **Qt Tools:** the wrench icon in the right sidebar.
+- **Code Intelligence:** open a `.py` / `.qml` / `.cpp` / `.h` file and pick **Python (LSP)** / **QML (LSP)** /
+  **C++ (LSP)** in the view switcher next to **Source**.
+  - Status bar: server state and problem count. 🐍 (Python) switches the interpreter; ⚙ (QML/C++) restarts the server
+    (press it after the first CMake configure). ⇄ shows and changes which machine the project's code is on.
+  - Ctrl+Click into a file inside an Orca workspace (your project, its venv, the build folder) opens it as an Orca tab at
+    the definition line. Files outside every workspace (the Python standard library, typeshed) and files on another
+    machine open in a peek view.
 
-### Cấu hình
+## Settings
 
-**Qt Developer Tools:** Qt bin folder, Python binding (PySide6/PyQt6/PyQt5/C++), Python interpreter, Format QML on
-save, CMake generator / build type.
+**Qt Developer Tools:** Qt bin folder, Python binding (PySide6/PyQt6/PyQt5/C++), Python interpreter, format QML on save,
+CMake generator and build type.
 
-**Qt Code Intelligence:** Python interpreter (để trống = tự chọn như VS Code), đường dẫn Pyright/basedpyright,
-Node.js, Qt bin folder, qmlls, clangd. Để trống là tự tìm.
+**Qt Code Intelligence:** Python interpreter, Python type checking, use project environments, basedpyright / Pyright path,
+Node.js, Qt bin folder, qmlls, clangd, extra compiler globs for clangd, SSH options. Empty means "find it".
 
-Interpreter Python được chọn theo thứ tự của VS Code: đã chọn tay → `.vscode/settings.json` →
-`pyrightconfig`/`pyproject` → venv của dự án (venv ngay trong dự án, bản Python cao nhất) → Python cài đặt bản cao nhất.
+The Python interpreter is picked in VS Code's order: your choice for the project → `.vscode/settings.json` →
+`pyrightconfig.json` / `pyproject.toml` → the project's venv (one directly in the project first, then the highest Python
+version) → the highest installed Python.
 
-### Code nằm ở máy khác (SSH, máy ghép nối) — tự động
+**Type checking** is `off` by default, like VS Code's Pylance: only syntax errors and unresolved imports. Set
+*Python type checking* to `basic`, `standard` or `strict` for more.
 
-Plugin chạy trên máy đang mở Orca và chỉ đọc được ổ đĩa máy đó. Khi file mở trong Orca nằm ở máy khác
-(workspace SSH, máy ghép nối qua Orca, ví dụ MacBook xem code của PC Windows), plugin tự làm:
+## Code on another machine (SSH)
 
-1. Không thấy file trên máy này → dò **mọi máy trong `~/.ssh/config`** cùng lúc bằng một script chỉ đọc (không cài gì).
-   Bỏ qua máy Git (github…), máy đi qua ProxyCommand, alias trùng máy; máy cần mật khẩu hoặc đang tắt thì bỏ qua.
-2. Máy nào có file → chép agent sang `~/.orca-qt-lsp` của máy đó, tự cài basedpyright nếu thiếu, chạy
-   Pyright/qmlls/clangd ngay trên máy có code (dùng venv và build của máy đó).
-3. **Nhớ máy cho từng dự án** (theo workspace Orca): lần sau vào thẳng, khoảng 1–2 giây. Máy cũ không còn file thì tự dò lại.
+The plugin runs on the machine that runs Orca and can only read that machine's disk. When the open file lives elsewhere
+(an SSH workspace, or a machine paired through Orca, e.g. a MacBook showing a Windows PC's code), it:
 
-Nút **⇄** ở góc dưới bên trái của editor hiện máy đang dùng; bấm để chọn *Tự động*, *Máy này*, một máy trong
-`~/.ssh/config`, hoặc gõ `user@host` cho dự án đó.
+1. Looks for the file read-only on every host in `~/.ssh/config`, in parallel (at most 40, key login only; Git hosts,
+   `ProxyCommand` hosts and duplicate aliases are skipped; files under 64 bytes are never guessed). Nothing is installed
+   while searching.
+2. On the host that has the file, copies a small agent to `~/.orca-qt-lsp`, installs basedpyright there if missing and
+   runs Pyright / qmlls / clangd on that machine, with its venv and build folders.
+3. Remembers the host per Orca workspace, so the next open goes straight there (about 1–2 s).
 
-Điều kiện (một lần cho mỗi máy kia):
-- Từ máy đang mở Orca SSH được **bằng khóa, không hỏi mật khẩu** (đã chấp nhận host key). Thử: `ssh -o BatchMode=yes <máy> echo ok`.
-- Máy kia có **Node.js ≥ 18**: tìm trên PATH, Homebrew, `/usr/bin`, nvm, fnm, volta, asdf, shell đăng nhập; chỗ khác thì đặt
-  *Remote node path*. QML/C++ cần qmlls/clangd trên máy kia. Máy Windows làm máy kia cần bật OpenSSH Server.
+The **⇄** button at the bottom left shows the current host; click it to choose *Automatic*, *This machine*, a host from
+`~/.ssh/config`, or type `user@host`. Set *Find files on SSH hosts automatically* to `off` to only use hosts you pick.
 
-Agent tìm file trong: workspace Orca của máy kia (nếu có Orca), thư mục đã dùng, *Remote project folders*, thư mục home,
-rồi các ổ đĩa (Windows) hoặc `/data`, `/srv`, `/opt`… (Linux).
+Each other machine needs, once:
+- Key-based SSH from the machine running Orca, with its host key accepted: `ssh -o BatchMode=yes <host> echo ok` must work.
+- **Node.js ≥ 18** — found on `PATH`, Homebrew, `/usr/bin`, nvm, fnm, volta, asdf or a login shell; otherwise set
+  *Remote node path*. QML and C++ need qmlls / clangd on that machine. A Windows host needs OpenSSH Server.
 
-Hạn chế: Ctrl+Click sang file khác ở máy kia mở khung xem nhanh (peek), không mở tab Orca (Orca chưa cho plugin mở tab
-file máy khác).
+## Security
 
-Đã kiểm chứng 04/11/2026: MacBook → PC Windows (`C:/path/to/project/app.py`, không điền gì: tự tìm 3,3 s, lần sau 1,6 s,
-venv của dự án), PC Windows → Ubuntu (node qua nvm, basedpyright tự cài), máy Linux không có Node (báo lỗi rõ).
+`trusted-worker` plugins run with your user account's access. What Qt Code Intelligence runs:
 
-### Kiểm tra kiểu Python
+- **Language servers** from your machine: basedpyright (via Node.js), qmlls, clangd.
+- **The project's Python environment.** With *Use project environments* on (the default, like VS Code), the project's
+  venv and `.vscode` / `pyrightconfig` interpreter are used, and Pyright runs that `python` to read its library paths.
+  Only interpreters inside a real environment (`pyvenv.cfg` or `conda-meta`) are considered, and the plugin never runs a
+  project file just to read its version. Still, a project you clone controls its venv: only open projects you trust, or
+  turn the setting off.
+- **Compilers for clangd** only from toolchain folders (Qt, LLVM, Visual Studio, MSYS2, `/usr/bin`, Xcode…), never one
+  named by a project's `compile_commands.json` elsewhere. Add more in *Extra compiler globs for clangd*.
+- **SSH** to hosts in your `~/.ssh/config` with `BatchMode=yes` (never prompts), only when a file isn't on this machine.
+  The search sends the file's SHA-1 and size and reads the remote disk; the agent is copied only to the host that has
+  the file. Host names are validated before they reach `ssh`.
+- **npm** installs `basedpyright@1.40.2` (exact version) into `%LOCALAPPDATA%\orca-qt-lsp` or `~/.local/share/orca-qt-lsp`.
 
-Mặc định **off** như Pylance của VS Code: chỉ báo lỗi cú pháp và import không tìm thấy. Muốn chặt hơn: Settings →
-*Python type checking* = `basic` / `standard` / `strict`.
+Qt Developer Tools runs Qt tools (Designer, uic, rcc, qmllint, lupdate/lrelease, CMake, qmake, Python) only when you
+press a button or run a command, plus `qmlformat` on save (can be turned off).
 
-## Phát triển
+Report security issues privately through GitHub's *Report a vulnerability* on this repository.
+
+## Development
 
 ```sh
-npm install                       # typescript, @types/node, vscode-textmate (kiểm tra, không nằm trong plugin)
+npm install                       # typescript, @types/node, vscode-textmate (checks only, not shipped)
 npx tsc -p plugins/qt-tools
 orca plugin test plugins/qt-tools
 orca plugin check plugins/qt-tools
 orca plugin validate plugins/qt-syntax
 node tools/tokenize-check.mjs plugins/qt-syntax samples/*
 
-# Qt Code Intelligence: mã nguồn ở lsp-build/src, build ra plugins/qt-lsp
-cd lsp-build && npm ci --ignore-scripts && node build.mjs
+# Qt Code Intelligence: source in lsp-build/src, built into plugins/qt-lsp
+cd lsp-build && npm ci && node build.mjs
 orca plugin dev load plugins/qt-lsp
 ```
 
-- **Đừng để gì khác vào thư mục `plugins/<tên>/`** (`node_modules`, `.d.ts`…). Orca băm toàn bộ thư mục; thêm file
-  sau khi duyệt làm worker không khởi động ("content hash mismatch"). Kiểu của Orca ở `types/orca/`.
-- `lsp-build/vendor/`: grammar + theme lấy từ VS Code (chạy lại `node prepare-vendor.mjs "<VS Code>\resources\app\extensions"` khi muốn cập nhật).
-- `lsp-build/dev/`: script test end-to-end trên Orca thật (`e2e-worker.ps1`, `e2e-qt.ps1`, `interp-e2e.ps1`) và dự án mẫu.
-- `tools/normalize-syntaxes.mjs`, `tools/build-icon-theme.mjs`: xem chú thích trong file.
+- **Never put anything else in `plugins/<name>/`** (`node_modules`, `.d.ts`…). Orca hashes the whole folder; extra files
+  after approval stop the worker ("content hash mismatch"). Orca's typings live in `types/orca/`.
+- `lsp-build/vendor/`: grammars and themes taken from VS Code; refresh with
+  `node prepare-vendor.mjs "<VS Code>/resources/app/extensions"`.
+- `lsp-build/dev/`: end-to-end scripts against a running Orca (`e2e-worker.ps1`, `e2e-qt.ps1`, `interp-e2e.ps1`,
+  `remote-e2e.mjs`) and sample-project generators.
+- `tools/normalize-syntaxes.mjs`, `tools/build-icon-theme.mjs`: see the comments in each file.
 
-### Phát hành bản mới
+### Release
 
-1. Sửa plugin, **tăng `version`** trong `orca-plugin.json` của plugin đó, commit.
+1. Change a plugin, **bump `version`** in its `orca-plugin.json`, commit.
 2. `node tools/build-catalog.mjs --url https://github.com/tungvu-vms/orca-qt-pack.git --owner tungvu-vms`
-3. Commit `orca-catalog.json`, push. Orca của team tự cập nhật (plugin `trusted-worker` thêm quyền mới sẽ hỏi duyệt lại).
+3. Commit `orca-catalog.json` and push. Installed copies update themselves; a `trusted-worker` release that asks for more
+   access waits for approval.
 
-## Nguồn và giấy phép
+## Sources and licenses
 
-| Thành phần | Nguồn | Giấy phép |
+| Component | Source | License |
 | --- | --- | --- |
-| Grammar qss, qrc, ui, qt-ts, qtd, qdoc, pysidedeploy; icon Qt | Extension Qt cho VS Code (qt-labs/vscodeext) 1.16.0 | LGPL-3.0 |
-| Grammar CMake, CMakeCache | microsoft/vscode-cmake-tools 1.24.42 | MIT |
-| Grammar pip-requirements | microsoft/vscode-python 2026.10.0 | MIT |
-| Grammar XML, INI, Java, C/C++, theme Dark+/Light+ | microsoft/vscode | MIT |
-| Grammar MagicPython | MagicStack | MIT |
-| Grammar QML | seanwu1105/vscode-qt-for-python (qua stablyai/orca-plugins) | MIT |
-| Monaco Editor, vscode-textmate, vscode-oniguruma | Microsoft | MIT (Oniguruma: BSD-2) |
-| Icon Material + theme gốc | stablyai/orca-plugins `material-icons` | MIT |
-| Grammar qmake, code của Qt Tools / Code Intelligence, các script | Tự viết | MIT |
+| qss, qrc, ui, qt-ts, qtd, qdoc, pysidedeploy grammars; Qt icons | Qt extension for VS Code (qt-labs/vscodeext) 1.16.0 | LGPL-3.0 |
+| CMake, CMakeCache grammars | microsoft/vscode-cmake-tools 1.24.42 | MIT |
+| pip-requirements grammar | microsoft/vscode-python 2026.10.0 | MIT |
+| XML, INI, Java, C/C++ grammars, Dark+/Light+ themes | microsoft/vscode | MIT |
+| MagicPython grammar | MagicStack | MIT |
+| QML grammar | seanwu1105/vscode-qt-for-python (via stablyai/orca-plugins) | MIT |
+| Monaco Editor, vscode-textmate, vscode-oniguruma | Microsoft | MIT (Oniguruma: BSD-2-Clause) |
+| Material icons and base theme | stablyai/orca-plugins `material-icons` | MIT |
+| qmake grammar, Qt Tools and Code Intelligence code, scripts | This repository | MIT |
 
-Language server không đóng gói kèm: basedpyright (MIT), qmlls (Qt), clangd (LLVM) chạy từ máy người dùng.
+Each plugin folder carries its license files and third-party notices. Language servers are not bundled: basedpyright
+(MIT), qmlls (Qt) and clangd (LLVM) run from the user's machine.

@@ -1,4 +1,4 @@
-// Client LSP toi gian qua stdio (JSON-RPC, Content-Length). Chay trong worker Node cua plugin.
+// Minimal LSP client over stdio (JSON-RPC, Content-Length). Runs in the plugin's Node worker.
 import { spawn, type ChildProcess } from 'node:child_process'
 
 type Handler = (params: any) => any
@@ -48,7 +48,7 @@ export class LspClient {
     if (!this.exited) this.write({ jsonrpc: '2.0', method, params })
   }
 
-  kill() { try { this.proc.kill() } catch { /* da thoat */ } }
+  kill() { try { this.proc.kill() } catch { /* already exited */ } }
 
   private write(msg: unknown) {
     const s = JSON.stringify(msg)

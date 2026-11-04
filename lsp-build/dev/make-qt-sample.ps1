@@ -1,5 +1,7 @@
-# Du an Qt Quick mau (C++ + QML) de kiem tra qmlls va clangd.
-$root = '<repo>\samples\qt-quick-app'
+# Creates a sample Qt Quick project (C++ + QML) for testing qmlls and clangd.
+# Usage: pwsh lsp-build/dev/make-qt-sample.ps1   (writes samples/qt-quick-app)
+$repo = Resolve-Path "$PSScriptRoot\..\.."
+$root = Join-Path $repo 'samples\qt-quick-app'
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 function File($p, $t) { New-Item -ItemType Directory -Force (Split-Path $p) | Out-Null; [IO.File]::WriteAllText($p, $t) }
 File "$root\CMakeLists.txt" @'

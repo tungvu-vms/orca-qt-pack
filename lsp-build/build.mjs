@@ -1,9 +1,9 @@
-// Build plugin qt-lsp vao ../plugins/qt-lsp:
-//   editor/{python,qml,cpp}.html + assets/*.js|css   Monaco + provider LSP (frame cach ly), chung JS, khac data-lang
-//   worker/worker.mjs                            worker Node (client LSP, do duong dan file)
-//   server/pyright/*                             Pyright (MIT) chep nguyen tu npm
-// Moi file <= 1 MiB (gioi han cua Orca), file lon hon thi tach chunk.
-// Dung: npm ci --ignore-scripts && node build.mjs
+// Builds the qt-lsp plugin into ../plugins/qt-lsp:
+//   editor/{python,qml,cpp}.html + assets/*.js|css   Monaco + LSP providers (isolated frame), shared JS, different data-lang
+//   worker/worker.mjs                            Node worker (LSP client, file path lookup)
+//   server/pyright/*                             Pyright (MIT) copied as-is from npm
+// Every file <= 1 MiB (Orca's limit); larger output is split into chunks.
+// Usage: npm ci --ignore-scripts && node build.mjs
 import { build } from 'esbuild'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -15,7 +15,7 @@ const MAX = 1024 * 1024
 for (const d of ['editor', 'worker', 'server']) rmSync(path.join(PLUGIN, d), { recursive: true, force: true })
 mkdirSync(path.join(PLUGIN, 'editor', 'assets'), { recursive: true })
 
-// Plugin: ?worker -> build rieng worker cua Monaco thanh file, tra ve class Worker
+// Plugin: ?worker -> build Monaco's worker into its own file and return a Worker class
 const workerPlugin = {
   name: 'monaco-worker',
   setup(b) {
@@ -53,7 +53,7 @@ writeFileSync(path.join(HERE, 'meta.json'), JSON.stringify(page.metafile))
 const css = readdirSync(path.join(PLUGIN, 'editor', 'assets')).filter((f) => f.endsWith('.css'))
 const PAGES = { python: 'Python (LSP)', qml: 'QML (LSP)', cpp: 'C++ (LSP)' }
 for (const [lang, title] of Object.entries(PAGES)) writeFileSync(path.join(PLUGIN, 'editor', `${lang}.html`), `<!doctype html>
-<html data-lang="${lang}">
+<html lang="en" data-lang="${lang}">
 <head>
 <meta charset="utf-8">
 <title>${title}</title>
@@ -82,13 +82,13 @@ body { display: flex; flex-direction: column; font: 12px system-ui, "Segoe UI", 
 </head>
 <body>
 <div id="editor"></div>
-<div id="bar"><button id="host" type="button" title="Máy chứa code của dự án này" hidden></button><div id="status" data-tone="busy">Đang khởi động…</div><button id="interp" type="button" title="Chọn interpreter Python" hidden></button></div>
-<div id="picker" hidden><input id="picker-filter" placeholder="Chọn interpreter Python (gõ để lọc)…" spellcheck="false"><div id="picker-list" role="listbox"></div></div>
+<div id="bar"><button id="host" type="button" title="Host with this project's code" hidden></button><div id="status" data-tone="busy">Starting…</div><button id="interp" type="button" title="Select Python interpreter" hidden></button></div>
+<div id="picker" hidden><input id="picker-filter" placeholder="Select a Python interpreter (type to filter)…" spellcheck="false"><div id="picker-list" role="listbox"></div></div>
 </body>
 </html>
 `)
 
-// Agent cho may khac (qua SSH): mot file .mjs tu chua, chi can Node >= 18 ben kia.
+// Agent for other hosts (over SSH): one self-contained .mjs file, only needs Node >= 18 on the remote side.
 const pkgVersion = JSON.parse(readFileSync(path.join(PLUGIN, 'orca-plugin.json'), 'utf8')).version
 await build({
   entryPoints: { agent: path.join(HERE, 'src', 'agent.ts') },
@@ -114,13 +114,13 @@ await build({
   logLevel: 'warning'
 })
 
-// Pyright khong goi vao plugin (typeshed > 2000 file): cai len may, worker tu tim.
+// Pyright is not bundled into the plugin (typeshed > 2000 files): it is installed on the machine and the worker finds it.
 
-// Kiem tra gioi han cua Orca
+// Check Orca's limits
 let files = 0, bytes = 0
 const big = []
 const walk = (d) => { for (const n of readdirSync(d)) { const f = path.join(d, n); const s = statSync(f); if (s.isDirectory()) walk(f); else { files++; bytes += s.size; if (s.size > MAX) big.push(`${path.relative(PLUGIN, f)} ${(s.size / 1048576).toFixed(2)} MiB`) } } }
 walk(PLUGIN)
-console.log(`plugin: ${files} file, ${(bytes / 1048576).toFixed(1)} MiB`)
+console.log(`plugin: ${files} files, ${(bytes / 1048576).toFixed(1)} MiB`)
 if (big.length) console.log('FILE > 1 MiB:\n  ' + big.join('\n  '))
-if (files > 2000 || bytes > 50 * MAX) console.log('VUOT GIOI HAN 2000 file / 50 MiB')
+if (files > 2000 || bytes > 50 * MAX) console.log('OVER LIMIT: 2000 files / 50 MiB')

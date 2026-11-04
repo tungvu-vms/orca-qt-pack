@@ -1,5 +1,5 @@
-// Kiem tra mot language server qua stdio: definition, hover, completion, semantic tokens.
-// Dung: node probe-ls.mjs <out.txt> <root> <file-rel> <languageId> <cmd> [args...] -- <line0>:<col0> ...
+// Probes a language server over stdio: definition, hover, completion, semantic tokens.
+// Usage: node probe-ls.mjs <out.txt> <root> <file-rel> <languageId> <cmd> [args...] -- <line0>:<col0> ...
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'

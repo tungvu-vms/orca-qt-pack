@@ -1,5 +1,5 @@
-// Tu cai basedpyright khi may chua co (dung chung cho worker Orca va agent SSH).
-// Dung npm di kem node tim duoc (nvm/fnm khong dua npm vao PATH); mot lan cai cho mot thu muc.
+// Installs basedpyright when missing (shared by the Orca worker and the SSH agent).
+// Uses the npm bundled with the found node (nvm/fnm do not put npm on PATH); one install at a time per folder.
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 export const PYRIGHT_VERSION = '1.40.2'
 const running = new Map<string, Promise<string | null>>()
 
-/** Cai vao `prefix` bang `node` (duong dan node.exe/node); tra ve langserver.index.js hoac null. */
+/** Install into `prefix` using `node` (path to node.exe/node); returns langserver.index.js or null. */
 export function installPyright(prefix: string, node: string, log: (m: string) => void): Promise<string | null> {
   const entry = join(prefix, 'node_modules', 'basedpyright', 'langserver.index.js')
   if (existsSync(entry)) return Promise.resolve(entry)
@@ -19,10 +19,10 @@ export function installPyright(prefix: string, node: string, log: (m: string) =>
     const cli = [join(binDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'), join(binDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')].find((p) => existsSync(p))
     const args = ['install', '--prefix', prefix, `basedpyright@${PYRIGHT_VERSION}`, '--no-audit', '--no-fund', '--no-update-notifier', '--loglevel=error']
     const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', PATH: binDir + (process.platform === 'win32' ? ';' : ':') + (process.env.PATH ?? '') }
-    log(`cai basedpyright ${PYRIGHT_VERSION} vao ${prefix} ...`)
+    log(`installing basedpyright ${PYRIGHT_VERSION} into ${prefix} ...`)
     const p = cli
       ? spawn(node, [cli, ...args], { env, windowsHide: true })
-      : spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, { env, shell: process.platform === 'win32', windowsHide: true })
+      : spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, { env, windowsHide: true })
     let err = ''
     p.stderr?.on('data', (d) => { err = (err + d).slice(-1500) })
     const timer = setTimeout(() => { try { p.kill() } catch { /* */ } }, 300000)
@@ -30,8 +30,8 @@ export function installPyright(prefix: string, node: string, log: (m: string) =>
     p.on('close', (code) => {
       clearTimeout(timer)
       running.delete(prefix)
-      if (code === 0 && existsSync(entry)) { log('da cai basedpyright'); resolve(entry) }
-      else { log(`cai basedpyright that bai (${code}): ${err.trim().slice(-400)}`); resolve(null) }
+      if (code === 0 && existsSync(entry)) { log('basedpyright installed'); resolve(entry) }
+      else { log(`basedpyright install failed (${code}): ${err.trim().slice(-400)}`); resolve(null) }
     })
   })
   running.set(prefix, job)

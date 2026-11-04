@@ -1,4 +1,4 @@
-// Test logic thuan: quet du an mau, dung lenh cho tung hanh dong.
+// Pure-logic tests: scan a sample project and build the command for each action.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
@@ -80,4 +80,14 @@ test('quoting handles spaces and quotes', () => {
   const s = q("it's a file.qml")
   assert.ok(s.startsWith("'") && s.endsWith("'"))
   assert.equal(q('plain.qml'), 'plain.qml')
+})
+
+test('quoting cannot be closed by typographic quotes (PowerShell)', () => {
+  const s = q('a’;calc;’.ui')
+  if (process.platform === 'win32') {
+    // every quote character is doubled, so the argument stays one literal string
+    assert.equal(s, "'a’’;calc;’’.ui'")
+  } else {
+    assert.ok(s.startsWith("'") && s.endsWith("'"))
+  }
 })

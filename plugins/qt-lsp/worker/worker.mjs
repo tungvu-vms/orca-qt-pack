@@ -8,7 +8,7 @@ import { fileURLToPath as fileURLToPath2 } from "node:url";
 // src/core.ts
 import { createHash } from "node:crypto";
 import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync2, statSync as statSync3 } from "node:fs";
-import { dirname as dirname4, join as join4, resolve as resolve3, sep } from "node:path";
+import { dirname as dirname4, join as join4, resolve as resolve3, sep as sep2 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -133,8 +133,8 @@ function installPyright(prefix, node, log) {
     const cli = [join(binDir, "node_modules", "npm", "bin", "npm-cli.js"), join(binDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")].find((p2) => existsSync(p2));
     const args = ["install", "--prefix", prefix, `basedpyright@${PYRIGHT_VERSION}`, "--no-audit", "--no-fund", "--no-update-notifier", "--loglevel=error"];
     const env = { ...process.env, ELECTRON_RUN_AS_NODE: "1", PATH: binDir + (process.platform === "win32" ? ";" : ":") + (process.env.PATH ?? "") };
-    log(`cai basedpyright ${PYRIGHT_VERSION} vao ${prefix} ...`);
-    const p = cli ? spawn2(node, [cli, ...args], { env, windowsHide: true }) : spawn2(process.platform === "win32" ? "npm.cmd" : "npm", args, { env, shell: process.platform === "win32", windowsHide: true });
+    log(`installing basedpyright ${PYRIGHT_VERSION} into ${prefix} ...`);
+    const p = cli ? spawn2(node, [cli, ...args], { env, windowsHide: true }) : spawn2(process.platform === "win32" ? "npm.cmd" : "npm", args, { env, windowsHide: true });
     let err = "";
     p.stderr?.on("data", (d) => {
       err = (err + d).slice(-1500);
@@ -152,10 +152,10 @@ function installPyright(prefix, node, log) {
       clearTimeout(timer);
       running.delete(prefix);
       if (code === 0 && existsSync(entry)) {
-        log("da cai basedpyright");
+        log("basedpyright installed");
         resolve5(entry);
       } else {
-        log(`cai basedpyright that bai (${code}): ${err.trim().slice(-400)}`);
+        log(`basedpyright install failed (${code}): ${err.trim().slice(-400)}`);
         resolve5(null);
       }
     });
@@ -167,7 +167,7 @@ function installPyright(prefix, node, log) {
 // src/interpreters.ts
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync2, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname as dirname2, isAbsolute, join as join2, resolve } from "node:path";
+import { basename, dirname as dirname2, isAbsolute, join as join2, resolve, sep } from "node:path";
 var WIN = process.platform === "win32";
 var lower = (p) => WIN ? p.toLowerCase() : p;
 function envExe(envDir) {
@@ -233,6 +233,7 @@ function cmpVersionDesc(a, b) {
   return 0;
 }
 var isEnvDir = (dir) => existsSync2(join2(dir, "pyvenv.cfg")) || existsSync2(join2(dir, "conda-meta"));
+var envDirOf = (exe2) => isEnvDir(dirname2(dirname2(exe2))) ? dirname2(dirname2(exe2)) : isEnvDir(dirname2(exe2)) ? dirname2(exe2) : null;
 function projectEnvs(root) {
   const found = /* @__PURE__ */ new Set();
   for (const n of [".venv", ".conda", ".virtualenv", "venv"]) if (isEnvDir(join2(root, n))) found.add(join2(root, n));
@@ -270,9 +271,12 @@ function vscodeInterpreter(root) {
     if (raw && raw !== "python") {
       const p = raw.replace(/\$\{workspaceFolder\}/g, dir).replace(/\$\{env:([^}]+)\}/g, (_, k) => process.env[k] ?? "");
       const abs = isAbsolute(p) ? p : resolve(dir, p);
-      if (existsSync2(abs) && statSync(abs).isFile()) return abs;
-      const exe2 = envExe(abs);
-      if (exe2) return exe2;
+      if (existsSync2(abs) && statSync(abs).isFile()) {
+        if (envDirOf(abs)) return abs;
+      } else {
+        const exe2 = isEnvDir(abs) ? envExe(abs) : null;
+        if (exe2) return exe2;
+      }
     }
     const up = dirname2(dir);
     if (up === dir) break;
@@ -294,7 +298,8 @@ function pyrightConfigInterpreter(root) {
     }
   }
   if (!venv) return null;
-  return envExe(resolve(root, venvPath ?? ".", venv));
+  const dir = resolve(root, venvPath ?? ".", venv);
+  return isEnvDir(dir) ? envExe(dir) : null;
 }
 function globalCandidates() {
   const out = [];
@@ -328,6 +333,7 @@ function globalCandidates() {
   });
 }
 function discoverInterpreters(file, root, opts = {}) {
+  const useProject = opts.projectEnvs !== false;
   const project = projectRootFor(file, root);
   const list = [];
   const seen = /* @__PURE__ */ new Set();
@@ -338,7 +344,8 @@ function discoverInterpreters(file, root, opts = {}) {
     const envDir = dirname2(dirname2(path));
     const isVenv = isEnvDir(envDir) || isEnvDir(dirname2(path));
     const dir = isEnvDir(envDir) ? envDir : isEnvDir(dirname2(path)) ? dirname2(path) : null;
-    const version = dir && venvVersion(dir) || runVersion(path);
+    const inProject = lower(resolve(path)).startsWith(lower(resolve(root)) + sep);
+    const version = dir && venvVersion(dir) || (inProject ? null : runVersion(path));
     const name = dir ? lower(dir).startsWith(lower(project) + (WIN ? "\\" : "/")) ? dir.slice(project.length + 1).replace(/\\/g, "/") : basename(dir) : `Python ${version ?? ""}`.trim();
     return { path: resolve(path), label: isVenv ? `${name}${version ? ` (${version})` : ""}` : `${name} (global)`, version, source, envDir: dir, reason };
   };
@@ -347,10 +354,10 @@ function discoverInterpreters(file, root, opts = {}) {
     const it = make(path, source, reason);
     if (it) list.push(it);
   };
-  add(opts.saved, "saved", "b\u1EA1n \u0111\xE3 ch\u1ECDn cho d\u1EF1 \xE1n n\xE0y");
-  add(opts.setting, "setting", 'setting "Python interpreter" c\u1EE7a plugin');
-  add(vscodeInterpreter(project), "vscode", "python.defaultInterpreterPath trong .vscode/settings.json");
-  add(pyrightConfigInterpreter(project), "pyright", "venvPath/venv trong pyrightconfig/pyproject");
+  add(opts.saved, "saved", "you selected it for this project");
+  add(opts.setting, "setting", 'plugin setting "Python interpreter"');
+  if (useProject) add(vscodeInterpreter(project), "vscode", "python.defaultInterpreterPath in .vscode/settings.json");
+  if (useProject) add(pyrightConfigInterpreter(project), "pyright", "venvPath/venv in pyrightconfig/pyproject");
   const levels = [];
   for (let dir = project; lower(dir).startsWith(lower(resolve(root))); ) {
     levels.push(dir);
@@ -359,14 +366,14 @@ function discoverInterpreters(file, root, opts = {}) {
     if (up === dir) break;
     dir = up;
   }
-  for (const [i, dir] of levels.entries()) {
+  for (const [i, dir] of useProject ? levels.entries() : []) {
     const envs = projectEnvs(dir).map((d) => ({ d, exe: envExe(d) })).map((x) => ({ ...x, version: venvVersion(x.d) })).sort((a, b) => Number(!a.exe) - Number(!b.exe) || cmpVersionDesc(a.version, b.version) || basename(a.d).localeCompare(basename(b.d)) || a.d.localeCompare(b.d));
-    for (const e of envs) if (e.exe) add(e.exe, "venv", i === 0 ? envs.length > 1 ? `venv trong d\u1EF1 \xE1n (${envs.length} venv: ch\u1ECDn b\u1EA3n Python cao nh\u1EA5t)` : "venv trong d\u1EF1 \xE1n" : "venv c\u1EE7a th\u01B0 m\u1EE5c cha");
+    for (const e of envs) if (e.exe) add(e.exe, "venv", i === 0 ? envs.length > 1 ? `project venv (${envs.length} venvs: highest Python version chosen)` : "project venv" : "parent folder venv");
   }
   const active = process.env.VIRTUAL_ENV;
-  if (active && lower(resolve(active)).startsWith(lower(project))) add(envExe(active), "env", "VIRTUAL_ENV \u0111ang k\xEDch ho\u1EA1t");
+  if (useProject && active && lower(resolve(active)).startsWith(lower(project))) add(envExe(active), "env", "active VIRTUAL_ENV");
   const globals = globalCandidates().map((p) => ({ p, v: runVersion(p) })).filter((x) => x.v).sort((a, b) => cmpVersionDesc(a.v, b.v));
-  for (const g of globals) add(g.p, "global", "kh\xF4ng c\xF3 venv: d\xF9ng Python c\xE0i \u0111\u1EB7t b\u1EA3n cao nh\u1EA5t");
+  for (const g of globals) add(g.p, "global", "no venv: using the highest installed Python");
   return list;
 }
 
@@ -487,7 +494,7 @@ function findBuildDirs(root, want) {
 }
 var PROJECT_MARKERS2 = {
   python: ["pyrightconfig.json", "pyproject.toml", "setup.py", "setup.cfg", ".git"],
-  // QML/C++: du an CMake/qmake (CMakeLists.txt sau nhat co project()), .qmlls.ini, compile_commands, .git
+  // QML/C++: CMake/qmake project (deepest CMakeLists.txt with project()), .qmlls.ini, compile_commands, .git
   qml: [".qmlls.ini", "CMakeLists.txt", ".git"],
   cpp: ["compile_commands.json", ".clangd", "compile_flags.txt", "CMakeLists.txt", ".git"]
 };
@@ -539,7 +546,7 @@ var SKIP2 = /* @__PURE__ */ new Set([
   "site-packages",
   ".cache",
   ".qtc_clangd",
-  // workspace la thu muc home (vd. /Users/<ten>): bo qua thu muc he thong/media lon
+  // workspace is the home folder (e.g. /Users/<name>): skip large system/media folders
   "Library",
   "Applications",
   "AppData",
@@ -644,7 +651,8 @@ function createCore(host) {
   }
   async function interpretersFor(root, file) {
     const saved = (await savedInterpreters())[norm(root)];
-    return discoverInterpreters(file ?? join4(root, "__init__.py"), root, { saved, setting: await setting("python", "") });
+    const projectEnvs2 = String(await setting("projectEnvironments", "on")).trim().toLowerCase() !== "off";
+    return discoverInterpreters(file ?? join4(root, "__init__.py"), root, { saved, setting: await setting("python", ""), projectEnvs: projectEnvs2 });
   }
   function findNode() {
     const exe2 = WIN3 ? "node.exe" : "node";
@@ -668,27 +676,44 @@ function createCore(host) {
   async function commandFor(lang, root) {
     if (lang === "python") {
       const entry = await setting("pyrightPath", "") || pyrightEntry() || await (host.installPyright ? host.installPyright() : installPyright(pyrightPrefix(), findNode(), host.log));
-      if (!entry) throw new Error(`Kh\xF4ng t\xECm th\u1EA5y basedpyright/Pyright tr\xEAn m\xE1y ${process.platform}. C\xE0i (c\u1EA7n Node.js 18+ k\xE8m npm): npm i --prefix ${WIN3 ? '"%LOCALAPPDATA%\\orca-qt-lsp"' : "~/.local/share/orca-qt-lsp"} basedpyright@1.40.2`);
+      if (!entry) throw new Error(`basedpyright/Pyright not found on this ${process.platform} machine. Install it (needs Node.js 18+ with npm): npm i --prefix ${WIN3 ? '"%LOCALAPPDATA%\\orca-qt-lsp"' : "~/.local/share/orca-qt-lsp"} basedpyright@1.40.2`);
       const node = await setting("nodePath", "") || findNode();
       return { cmd: node, args: [entry, "--stdio"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, detail: entry.includes("basedpyright") ? "basedpyright" : "pyright" };
     }
     if (lang === "qml") {
       const qmlls = findQmlls(await setting("qmllsPath", ""), await setting("qtBin", ""));
-      if (!qmlls) throw new Error('Kh\xF4ng t\xECm th\u1EA5y qmlls (Qt 6.4+). \u0110\u1EB7t "qmlls path" ho\u1EB7c "Qt bin folder" trong Settings c\u1EE7a plugin.');
+      if (!qmlls) throw new Error('qmlls (Qt 6.4+) not found. Set "qmlls path" or "Qt bin folder" in the plugin Settings.');
       const args2 = [];
       const builds = findBuildDirs(root, "qml");
       for (const b of builds.slice(0, 1)) args2.push("-b", b);
       const qmlDir = join4(dirname4(dirname4(qmlls)), "qml");
       if (existsSync4(qmlDir)) args2.push("-I", qmlDir);
-      return { cmd: qmlls, args: args2, detail: builds[0] ? `build: ${builds[0].slice(root.length + 1) || "."}` : "ch\u01B0a c\xF3 th\u01B0 m\u1EE5c build (ch\u1EA1y CMake configure \u0111\u1EC3 qmlls th\u1EA5y module c\u1EE7a d\u1EF1 \xE1n)" };
+      return { cmd: qmlls, args: args2, detail: builds[0] ? `build: ${builds[0].slice(root.length + 1) || "."}` : "no build folder yet (run CMake configure so qmlls can see the project modules)" };
     }
     const clangd = findClangd(await setting("clangdPath", ""));
-    if (!clangd) throw new Error('Kh\xF4ng t\xECm th\u1EA5y clangd. C\xE0i LLVM ho\u1EB7c Qt Creator, ho\u1EB7c \u0111\u1EB7t "clangd path" trong Settings.');
+    if (!clangd) throw new Error('clangd not found. Install LLVM or Qt Creator, or set "clangd path" in Settings.');
     const args = ["--background-index", "--clang-tidy=false", "--header-insertion=never", "--completion-style=detailed", "--log=error", "--pch-storage=memory"];
     const cc = findBuildDirs(root, "compile_commands");
     if (cc[0]) args.push(`--compile-commands-dir=${cc[0]}`);
-    args.push("--query-driver=**/*g++*,**/*gcc*,**/*c++*,**/*cc.exe,**/*clang++*,**/*clang*,**/cl.exe");
-    return { cmd: clangd, args, detail: cc[0] ? `compile_commands: ${cc[0].slice(root.length + 1) || "."}` : "ch\u01B0a c\xF3 compile_commands.json (CMake configure v\u1EDBi CMAKE_EXPORT_COMPILE_COMMANDS=ON)" };
+    const drivers = WIN3 ? [
+      "C:/Qt/Tools/**/bin/*.exe",
+      "C:/Program Files/LLVM/bin/*.exe",
+      "C:/Program Files/Microsoft Visual Studio/**/bin/**/cl.exe",
+      "C:/Program Files (x86)/Microsoft Visual Studio/**/bin/**/cl.exe",
+      "C:/msys64/*/bin/*.exe",
+      "C:/mingw*/bin/*.exe"
+    ] : [
+      "/usr/bin/*",
+      "/usr/local/bin/*",
+      "/opt/homebrew/bin/*",
+      "/opt/homebrew/opt/llvm/bin/*",
+      "/Library/Developer/CommandLineTools/usr/bin/*",
+      "/Applications/Xcode*.app/Contents/Developer/Toolchains/**/bin/*",
+      `${homedir2()}/Qt/Tools/**/bin/*`
+    ];
+    const extra = String(await setting("compilerGlobs", "")).split(/[;,\n]/).map((x) => x.trim()).filter(Boolean);
+    args.push(`--query-driver=${[...drivers, ...extra].join(",")}`);
+    return { cmd: clangd, args, detail: cc[0] ? `compile_commands: ${cc[0].slice(root.length + 1) || "."}` : "no compile_commands.json yet (run CMake configure with CMAKE_EXPORT_COMPILE_COMMANDS=ON)" };
   }
   async function serverFor(lang, root, file) {
     const existing = servers.get(key(lang, root));
@@ -743,7 +768,7 @@ function createCore(host) {
       processId: process.pid,
       rootUri,
       rootPath: root,
-      workspaceFolders: [{ uri: rootUri, name: root.split(sep).pop() }],
+      workspaceFolders: [{ uri: rootUri, name: root.split(sep2).pop() }],
       capabilities: {
         general: { positionEncodings: ["utf-16"] },
         textDocument: {
@@ -773,7 +798,7 @@ function createCore(host) {
     let best = null;
     for (const s of servers.values()) {
       if (s.lang !== lang) continue;
-      if (norm(path).startsWith(norm(s.root) + sep) && (!best || s.root.length > best.root.length)) best = s;
+      if (norm(path).startsWith(norm(s.root) + sep2) && (!best || s.root.length > best.root.length)) best = s;
     }
     return best;
   }
@@ -787,7 +812,7 @@ function createCore(host) {
     let best = null;
     for (const w of [...roots, ...[...servers.values()].map((s) => s.root)]) {
       const r = resolve3(w);
-      if (p.startsWith(norm(r) + sep) && (!best || r.length > best.length)) best = r;
+      if (p.startsWith(norm(r) + sep2) && (!best || r.length > best.length)) best = r;
     }
     if (!best) return null;
     const root = projectRootFor2(lang, path, best);
@@ -796,9 +821,9 @@ function createCore(host) {
   }
   async function serverForPath(path) {
     const lang = langOfPath(path);
-    if (!lang) throw new Error(`Kh\xF4ng h\u1ED7 tr\u1EE3 lo\u1EA1i file ${path}`);
+    if (!lang) throw new Error(`Unsupported file type: ${path}`);
     const r = await rootForFile(lang, path);
-    if (!r) throw new Error(`Kh\xF4ng t\xECm th\u1EA5y workspace ch\u1EE9a ${path}`);
+    if (!r) throw new Error(`No workspace contains ${path}`);
     const srv = await serverFor(lang, r, path);
     if (!srv.open.has(norm(path))) {
       try {
@@ -855,10 +880,10 @@ function createCore(host) {
     if (!wsRoot) {
       const scanned = roots.map((r) => `${r} (${[...hashIndex.get(r)?.byHash.values() ?? []].reduce((n, l) => n + l.length, 0)} file)`);
       host.log(`attach miss: lang=${lang} size=${input.size} roots=${scanned.join(" | ")}`);
-      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: `Kh\xF4ng t\xECm th\u1EA5y file n\xE0y (${roots.length} workspace \u0111\xE3 qu\xE9t).` };
+      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: `File not found (${roots.length} workspaces scanned).` };
     }
     let ws = wsRoot;
-    for (const w of listed.roots) if (norm(hits[0]).startsWith(norm(resolve3(w)) + sep) && resolve3(w).length > ws.length) ws = resolve3(w);
+    for (const w of listed.roots) if (norm(hits[0]).startsWith(norm(resolve3(w)) + sep2) && resolve3(w).length > ws.length) ws = resolve3(w);
     const root = projectRootFor2(lang, hits[0], ws);
     try {
       const srv = await serverFor(lang, root, hits[0]);
@@ -926,10 +951,10 @@ function createCore(host) {
     });
   }
   const workspaceRemoved = (path) => {
-    for (const s of [...servers.values()]) if (norm(s.root) === norm(path) || norm(s.root).startsWith(norm(path) + sep)) stopServer(s);
+    for (const s of [...servers.values()]) if (norm(s.root) === norm(path) || norm(s.root).startsWith(norm(path) + sep2)) stopServer(s);
   };
   const LIB_RE = /[\\/](site-packages|\.venv|venv|env|node_modules|typeshed-fallback|include|Qt[\\/]\d|mingw\d*_64|qml[\\/]Qt|QtQuick)[\\/]/i;
-  const isLibPath = (p, root) => !norm(p).startsWith(norm(root) + sep) || LIB_RE.test(p.slice(root.length)) || /[\\/](build|out|cmake-build-[^\\/]*)[\\/]/i.test(p.slice(root.length));
+  const isLibPath = (p, root) => !norm(p).startsWith(norm(root) + sep2) || LIB_RE.test(p.slice(root.length)) || /[\\/](build|out|cmake-build-[^\\/]*)[\\/]/i.test(p.slice(root.length));
   handle("lsp.hover", async ({ path, position }) => {
     const srv = await serverForPath(path);
     const r = await srv.client.request("textDocument/hover", { textDocument: { uri: uriOf(path) }, position });
@@ -938,6 +963,7 @@ function createCore(host) {
     const md = typeof c === "string" ? c : Array.isArray(c) ? c.map((x) => typeof x === "string" ? x : "```" + (x.language ?? "") + "\n" + x.value + "\n```").join("\n\n") : c?.kind === "plaintext" ? "```\n" + c.value + "\n```" : c?.value ?? null;
     return JSON.parse(JSON.stringify({ markdown: md ?? null, range: r.range ?? null }));
   });
+  const peekable = /* @__PURE__ */ new Set();
   handle("lsp.definition", async ({ path, position }) => {
     const srv = await serverForPath(path);
     let r = await srv.client.request("textDocument/definition", { textDocument: { uri: uriOf(path) }, position });
@@ -953,7 +979,8 @@ function createCore(host) {
       } catch {
         continue;
       }
-      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r2) => norm(p).startsWith(norm(r2) + sep)) });
+      peekable.add(norm(p));
+      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r2) => norm(p).startsWith(norm(r2) + sep2)) });
     }
     return JSON.parse(JSON.stringify({ locations }));
   });
@@ -1018,7 +1045,7 @@ function createCore(host) {
     return { legend: srv.legend, data: data.length > 15e4 ? data.slice(0, 15e4) : data };
   });
   handle("lsp.peek", async ({ path, line }) => {
-    if (!langOfPath(path) && !/(^|[\\/])[A-Z][A-Za-z0-9]*$/.test(path)) return { text: "", lang: null };
+    if (!peekable.has(norm(path))) return { text: "", lang: null };
     const lang = langOfPath(path) ?? "cpp";
     const LIMIT = 3e5;
     let text;
@@ -1063,7 +1090,8 @@ const sizes=new Set(A.sizes),SK=new Set(A.skip),ext=new RegExp(A.ext,'i');
 const roots=[...A.hints,...A.roots];
 try{const st=JSON.parse(fs.readFileSync(path.join(os.homedir(),'.orca-qt-lsp','state.json'),'utf8'));roots.push(...(st.roots||[]))}catch{}
 const win=process.platform==='win32';
-try{const o=require('child_process').execSync(win?'orca.cmd worktree list --json':'orca worktree list --json',{encoding:'utf8',timeout:8000,stdio:['ignore','pipe','ignore'],maxBuffer:64<<20,windowsHide:true});
+const cli=win?path.join(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local'),'Programs','orca','resources','bin','orca.exe'):process.platform==='darwin'?'/Applications/Orca.app/Contents/Resources/bin/orca':'';
+try{if(!cli||!fs.existsSync(cli))throw 0;const o=require('child_process').execFileSync(cli,['worktree','list','--json'],{encoding:'utf8',timeout:8000,stdio:['ignore','pipe','ignore'],maxBuffer:64<<20,windowsHide:true});
  for(const w of (JSON.parse(o).result||{}).worktrees||[])if(!w.hostId||w.hostId==='local')roots.push(w.path)}catch{}
 roots.push(os.homedir());
 if(win){for(const d of 'CDEFGH')roots.push(d+':\\')}else{for(const d of ['/data','/srv','/opt','/workspace','/work','/projects'])roots.push(d)}
@@ -1116,13 +1144,14 @@ var NODE_CANDIDATES = [
   (a) => ["/opt/homebrew/bin/node", a],
   (a) => ["/usr/local/bin/node", a],
   (a) => ["/usr/bin/node", a],
-  // nvm / fnm / volta / asdf: node khong nam tren PATH cua phien SSH khong tuong tac.
-  // Lenh duoi chay bang sh (Linux/macOS); tren Windows (cmd) se loi va bi bo qua.
+  // nvm / fnm / volta / asdf: node is not on the PATH of a non-interactive SSH session.
+  // The command below runs under sh (Linux/macOS); on Windows (cmd) it fails and is skipped.
   (a) => ["sh", "-c", `'n=$(ls -d "$HOME"/.nvm/versions/node/*/bin/node "$HOME"/.local/share/fnm/node-versions/*/installation/bin/node "$HOME"/.volta/bin/node "$HOME"/.asdf/shims/node 2>/dev/null | sort -V | tail -1); [ -n "$n" ] && exec "$n" ${a}; exit 127'`],
   (a) => ["bash", "-lc", `'exec node ${a}'`],
   (a) => ["zsh", "-lc", `'exec node ${a}'`],
   (a) => ["bash", "-ic", `'exec node ${a}'`]
 ];
+var isValidHost = (h) => /^[A-Za-z0-9_][A-Za-z0-9_.@%+-]*$/.test(h) && h.length <= 255;
 function findSsh(setting) {
   if (setting) return setting;
   if (process.platform === "win32") {
@@ -1137,6 +1166,7 @@ var RemoteAgent = class {
     this.ssh = ssh;
     this.agentSource = agentSource;
     this.settings = settings;
+    if (!isValidHost(host)) throw new Error(`Invalid SSH host: ${JSON.stringify(host)}`);
     this.version = createHash2("sha1").update(agentSource).digest("hex").slice(0, 10);
   }
   host;
@@ -1159,9 +1189,9 @@ var RemoteAgent = class {
     return !!this.proc && this.proc.exitCode === null && !!this.info;
   }
   sshArgs(cmd) {
-    return ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", this.host, ...cmd];
+    return ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "--", this.host, ...cmd];
   }
-  /** Chay mot lenh ngan qua SSH, gui `input` vao stdin roi dong. */
+  /** Run a short command over SSH, write `input` to stdin, then close it. */
   run(cmd, input, timeoutMs = 6e4) {
     return new Promise((resolve5) => {
       const p = spawn3(this.ssh, this.sshArgs(cmd), { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
@@ -1192,9 +1222,10 @@ var RemoteAgent = class {
   nodeCandidates() {
     if (this.nodeKnown) return [this.node];
     const custom = String(this.settings.remoteNode ?? "").trim();
+    if (custom && !/^[w./~:\-]+$/.test(custom)) throw new Error(`Invalid "Remote node path": ${custom}`);
     return custom ? [(a) => [custom, a], ...NODE_CANDIDATES] : NODE_CANDIDATES;
   }
-  /** Do tim file tren may kia, chi doc (xem probe-script.ts). Nem loi neu khong SSH/khong chay duoc node. */
+  /** Search for the file on the remote host, read-only (see probe-script.ts). Throws if SSH or node fails. */
   async probe(q) {
     const script = `const Q=${JSON.stringify(Buffer.from(JSON.stringify(q)).toString("base64"))};${PROBE_SCRIPT}`;
     let last = "";
@@ -1209,9 +1240,9 @@ var RemoteAgent = class {
       last = (r.err || r.out).trim().split("\n").pop()?.slice(0, 160) ?? String(r.code);
       if (r.code === 255) break;
     }
-    throw new Error(last || "kh\xF4ng ch\u1EA1y \u0111\u01B0\u1EE3c node");
+    throw new Error(last || "could not run node");
   }
-  /** Chep agent sang may kia (neu chua co ban nay) va tim node dung duoc. */
+  /** Copy the agent to the remote host (if this version is missing) and find a working node. */
   async install() {
     const b64 = Buffer.from(this.agentSource).toString("base64");
     const script = `const fs=require('fs'),path=require('path'),os=require('os');const d=path.join(os.homedir(),'.orca-qt-lsp');fs.mkdirSync(d,{recursive:true});const f=path.join(d,'agent-${this.version}.mjs');if(!fs.existsSync(f)){fs.writeFileSync(f+'.tmp',Buffer.from('${b64}','base64'));fs.renameSync(f+'.tmp',f)}for(const n of fs.readdirSync(d))if(/^agent-[0-9a-f]+\\.mjs$/.test(n)&&n!=='agent-${this.version}.mjs')try{fs.unlinkSync(path.join(d,n))}catch{}console.log('QTLSP-OK '+process.version+' '+process.platform)
@@ -1222,15 +1253,15 @@ var RemoteAgent = class {
       if (r.out.includes("QTLSP-OK")) {
         this.node = node;
         this.nodeKnown = true;
-        this.log(`${this.host}: agent ${this.version} san sang (${r.out.trim().split(" ").slice(1).join(" ")}, ${node("").join(" ")})`);
+        this.log(`${this.host}: agent ${this.version} ready (${r.out.trim().split(" ").slice(1).join(" ")}, ${node("").join(" ")})`);
         return;
       }
       tried.push(`${node("").join(" ")}: ${(r.err || r.out).trim().split("\n").pop()?.slice(0, 160) ?? r.code}`);
       if (r.code === 255) break;
     }
     const last = tried[tried.length - 1] ?? "";
-    const hint = /Host key verification|Permission denied|publickey|Could not resolve|timed out|Connection refused/i.test(last) ? `Ki\u1EC3m tra: ch\u1EA1y "ssh ${this.host}" m\u1ED9t l\u1EA7n trong terminal (ch\u1EA5p nh\u1EADn host key) v\xE0 d\xF9ng kh\xF3a SSH, kh\xF4ng m\u1EADt kh\u1EA9u.` : 'M\xE1y kia c\u1EA7n Node.js >= 18 (ho\u1EB7c \u0111\u1EB7t "Remote node path").';
-    throw new Error(`Kh\xF4ng ch\u1EA1y \u0111\u01B0\u1EE3c agent tr\xEAn ${this.host}: ${last}. ${hint}`);
+    const hint = /Host key verification|Permission denied|publickey|Could not resolve|timed out|Connection refused/i.test(last) ? `Check: run "ssh ${this.host}" once in a terminal (accept the host key) and use an SSH key, not a password.` : 'The remote host needs Node.js >= 18 (or set "Remote node path").';
+    throw new Error(`Could not run the agent on ${this.host}: ${last}. ${hint}`);
   }
   start() {
     if (this.alive && this.info) return Promise.resolve(this.info);
@@ -1247,7 +1278,7 @@ var RemoteAgent = class {
         this.lastError = e.message;
       });
       p.on("exit", (code) => {
-        this.lastError = `${this.host}: agent tho\xE1t (${code}) ${errTail.trim().split("\n").pop() ?? ""}`;
+        this.lastError = `${this.host}: agent exited (${code}) ${errTail.trim().split("\n").pop() ?? ""}`;
         this.log(this.lastError);
         this.info = null;
         this.proc = null;
@@ -1289,18 +1320,18 @@ var RemoteAgent = class {
   }
   call(m, p, timeoutMs = 9e4) {
     const proc = this.proc;
-    if (!proc || proc.exitCode !== null) return Promise.reject(new Error(this.lastError || `${this.host}: ch\u01B0a k\u1EBFt n\u1ED1i`));
+    if (!proc || proc.exitCode !== null) return Promise.reject(new Error(this.lastError || `${this.host}: not connected`));
     const id = this.nextId++;
     return new Promise((resolve5, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`${this.host}: ${m} qu\xE1 th\u1EDDi gian`));
+        reject(new Error(`${this.host}: ${m} timed out`));
       }, timeoutMs);
       this.pending.set(id, { resolve: resolve5, reject, timer });
       proc.stdin.write(JSON.stringify({ id, m, p }) + "\n");
     });
   }
-  /** Gui khong cho tra loi (vd. danh sach thu muc goc). */
+  /** Send without waiting for a reply (e.g. the list of root folders). */
   notify(m, p) {
     if (this.proc && this.proc.exitCode === null) this.proc.stdin.write(JSON.stringify({ id: 0, m, p }) + "\n");
   }
@@ -1327,7 +1358,7 @@ var REMOTE_RE = /^@([^:]+):(.*)$/s;
 var tag = (host, p) => `@${host}:${p}`;
 var untag = (p) => {
   const m = REMOTE_RE.exec(p);
-  return m ? { host: m[1], path: m[2] } : null;
+  return m && isValidHost(m[1]) ? { host: m[1], path: m[2] } : null;
 };
 var errText = (e) => e instanceof Error ? e.message : String(e);
 function sshConfigHosts(auto = false, configPath = join5(homedir3(), ".ssh", "config")) {
@@ -1378,7 +1409,7 @@ function sshConfigHosts(auto = false, configPath = join5(homedir3(), ".ssh", "co
       const target = `${(b.opts.user ?? "").toLowerCase()}@${hostName}:${b.opts.port ?? "22"}|${b.opts.proxyjump ?? ""}`;
       if (auto && seenTarget.has(target)) continue;
       seenTarget.add(target);
-      out.push(n);
+      if (isValidHost(n)) out.push(n);
     }
   }
   return [...new Set(out)];
@@ -1421,7 +1452,7 @@ function cliOpen(file, wsPath, line) {
 }
 function activate(orca) {
   cliLog = (m) => orca.log(m);
-  orca.log(`orca cli: ${CLI ?? "kh\xF4ng t\xECm th\u1EA5y"}`);
+  orca.log(`orca cli: ${CLI ?? "not found"}`);
   const setting = async (k, fallback) => {
     try {
       const v = await orca.settings.get(k);
@@ -1479,7 +1510,7 @@ function activate(orca) {
     });
   } catch {
   }
-  const extraHosts = async () => String(await setting("remoteHosts", "")).split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+  const extraHosts = async () => String(await setting("remoteHosts", "")).split(/[\s,;]+/).map((s) => s.trim()).filter(isValidHost);
   function remoteFor(host) {
     let a = agents.get(host);
     if (!a) {
@@ -1515,7 +1546,7 @@ function activate(orca) {
     return v;
   };
   const PROJECT_HOSTS = "projectHosts";
-  const NO_PROJECT = "(kh\xF4ng c\xF3 workspace)";
+  const NO_PROJECT = "(no workspace)";
   async function projectKey() {
     const ctx = await orca.host.call("workspace.readContext", {}).catch(() => null);
     return ctx?.displayName || NO_PROJECT;
@@ -1550,14 +1581,20 @@ function activate(orca) {
         if (r.path) return r;
         await rememberHost(key2, null);
       } catch (e) {
-        return { ok: false, path: null, candidates: 0, workspace: null, server: null, message: `${chosen}: ${errText(e)} \u2014 b\u1EA5m \u21C4 \u1EDF g\xF3c d\u01B0\u1EDBi \u0111\u1EC3 ch\u1ECDn m\xE1y kh\xE1c.` };
+        return { ok: false, path: null, candidates: 0, workspace: null, server: null, message: `${chosen}: ${errText(e)} \u2014 press \u21C4 at the bottom to pick another host.` };
       }
     }
     const res = await local.handlers["lsp.attach"](input);
     if (res.path) return res;
+    if (String(await setting("autoFindRemote", "on")).trim().toLowerCase() === "off") {
+      return { ...res, message: "File not found on this machine. Automatic search on SSH hosts is off: press \u21C4 at the bottom to pick the host for this project." };
+    }
+    if ((input.size ?? 0) < 64) {
+      return { ...res, message: "File not found on this machine and too small to identify on another one: press \u21C4 at the bottom to pick its host." };
+    }
     const hosts = [.../* @__PURE__ */ new Set([...await extraHosts(), ...sshConfigHosts(true)])].slice(0, 40);
     if (!hosts.length) {
-      return { ...res, message: "Kh\xF4ng t\xECm th\u1EA5y file tr\xEAn m\xE1y n\xE0y, v\xE0 ~/.ssh/config ch\u01B0a c\xF3 m\xE1y n\xE0o. N\u1EBFu code \u1EDF m\xE1y kh\xE1c: b\u1EA5m \u21C4 \u1EDF g\xF3c d\u01B0\u1EDBi, g\xF5 user@host." };
+      return { ...res, message: "File not found on this machine, and ~/.ssh/config has no hosts. If the code is on another host: press \u21C4 at the bottom and type user@host." };
     }
     const hints = await remoteHints();
     const sizes = [input.size, input.sizeCrlf].filter((s) => typeof s === "number").flatMap((s) => [s, s + 3]);
@@ -1573,7 +1610,7 @@ function activate(orca) {
             if (hit && !settled) {
               settled = true;
               done({ host, root: hit.root });
-            } else if (!hit) errors.push(`${host}: kh\xF4ng c\xF3`);
+            } else if (!hit) errors.push(`${host}: not found`);
           },
           (e) => {
             errors.push(`${host}: ${errText(e).slice(0, 80)}`);
@@ -1587,7 +1624,7 @@ function activate(orca) {
       }
     });
     if (found) {
-      orca.log(`project "${key2}" -> ${found.host} (t\u1EF1 t\xECm th\u1EA5y trong ${found.root})`);
+      orca.log(`project "${key2}" -> ${found.host} (auto-found in ${found.root})`);
       try {
         const r = await attachOn(found.host, input, [found.root, ...hints]);
         if (r.path) {
@@ -1595,11 +1632,11 @@ function activate(orca) {
           return r;
         }
       } catch (e) {
-        return { ...res, message: `T\xECm th\u1EA5y file tr\xEAn ${found.host} nh\u01B0ng kh\xF4ng ch\u1EA1y \u0111\u01B0\u1EE3c agent: ${errText(e)}` };
+        return { ...res, message: `Found the file on ${found.host} but could not run the agent: ${errText(e)}` };
       }
     }
     orca.log(`attach miss on ${hosts.length} hosts: ${errors.join("; ")}`);
-    return { ...res, message: `Kh\xF4ng t\xECm th\u1EA5y file tr\xEAn m\xE1y n\xE0y v\xE0 ${hosts.length} m\xE1y SSH (${errors.slice(0, 3).join("; ")}${errors.length > 3 ? "\u2026" : ""}). B\u1EA5m \u21C4 \u1EDF g\xF3c d\u01B0\u1EDBi \u0111\u1EC3 ch\u1ECDn m\xE1y.` };
+    return { ...res, message: `File not found on this machine or on ${hosts.length} SSH hosts (${errors.slice(0, 3).join("; ")}${errors.length > 3 ? "\u2026" : ""}). Press \u21C4 at the bottom to pick a host.` };
   }
   const route = (name) => async (input) => {
     const target = input && typeof input.path === "string" ? untag(input.path) : null;
@@ -1623,9 +1660,10 @@ function activate(orca) {
   });
   orca.panels.handle("lsp.setHost", async (input) => {
     const host = (input?.host ?? "").trim() || null;
+    if (host && host !== "local" && !isValidHost(host)) return { ok: false, error: `Invalid SSH host: ${host}` };
     const key2 = await projectKey();
     await rememberHost(key2, host);
-    orca.log(`project "${key2}" -> ${host ?? "t\u1EF1 \u0111\u1ED9ng"} (ch\u1ECDn tay)`);
+    orca.log(`project "${key2}" -> ${host ?? "automatic"} (manual choice)`);
     if (host && host !== "local") {
       try {
         const a = await agentFor(host);

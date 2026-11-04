@@ -1,8 +1,8 @@
-// Agent Qt LSP chay tren may tu xa (qua SSH): cung loi voi worker Orca, doc file va chay
-// basedpyright/qmlls/clangd tren may co code. Giao tiep stdin/stdout, moi tin mot dong JSON:
-//   vao:  {"id":1,"m":"lsp.attach","p":{...}}      {"id":0,"m":"$hello","p":{"settings":{...}}}
-//   ra:   {"id":1,"r":...} | {"id":1,"e":"loi"} | {"ev":"lsp.diagnostics","p":{...}} | {"log":"..."}
-// Chi dung Node >= 18 co san; khong can Orca tren may nay.
+// Qt LSP agent running on a remote host (over SSH): same core as the Orca worker, reads files and runs
+// basedpyright/qmlls/clangd on the host that has the code. Talks over stdin/stdout, one JSON line per message:
+//   in:   {"id":1,"m":"lsp.attach","p":{...}}      {"id":0,"m":"$hello","p":{"settings":{...}}}
+//   out:  {"id":1,"r":...} | {"id":1,"e":"error"} | {"ev":"lsp.diagnostics","p":{...}} | {"log":"..."}
+// Needs only Node >= 18; Orca is not required on this host.
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -24,23 +24,27 @@ let settings: Record<string, unknown> = {}
 const statePath = join(HOME, 'state.json')
 const readState = (): Record<string, unknown> => { try { return JSON.parse(readFileSync(statePath, 'utf8')) } catch { return {} } }
 
-/** Workspace cua Orca cai tren chinh may nay (neu co): `orca worktree list --json`. Cache 60 s. */
+/** Workspaces of an Orca installed on this host (if any): `orca worktree list --json`. Cached for 60 s. */
 let orcaRoots: { at: number; list: string[] } = { at: 0, list: [] }
 function orcaWorkspaces(): string[] {
   if (Date.now() - orcaRoots.at < 60000) return orcaRoots.list
   let list: string[] = []
   try {
-    const win = process.platform === 'win32'
-    const r = spawnSync(win ? 'orca.cmd' : 'orca', ['worktree', 'list', '--json'], { encoding: 'utf8', shell: win, timeout: 15000, maxBuffer: 64 << 20, windowsHide: true })
+    // Full path to Orca's own CLI, never a lookup through a shell (on Linux `orca` is usually the GNOME screen reader)
+    const cli = process.platform === 'win32'
+      ? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'Programs', 'orca', 'resources', 'bin', 'orca.exe')
+      : process.platform === 'darwin' ? '/Applications/Orca.app/Contents/Resources/bin/orca' : ''
+    if (!cli || !existsSync(cli)) throw new Error('no orca')
+    const r = spawnSync(cli, ['worktree', 'list', '--json'], { encoding: 'utf8', timeout: 15000, maxBuffer: 64 << 20, windowsHide: true })
     const j = JSON.parse(r.stdout || '{}')
     list = (j.result?.worktrees ?? []).filter((w: any) => !w.hostId || w.hostId === 'local').map((w: any) => String(w.path))
-  } catch { /* may nay khong co Orca */ }
+  } catch { /* no Orca on this host */ }
   orcaRoots = { at: Date.now(), list }
   return list
 }
 
-/** Thu muc goc cua may nay, theo thu tu: goi y tu worker, thu muc da dung, cau hinh, workspace Orca cua may nay,
- *  cuoi cung la thu muc home (quet theo chieu rong, dung som khi gap file). */
+/** Root folders on this host, in order: worker hints, previously used folders, settings, this host's Orca workspaces,
+ *  and finally the home folder (breadth-first scan, stops early once the file is found). */
 const usedRoots = new Set<string>((readState().roots as string[] | undefined) ?? [])
 function rootsOf(hints?: string[]) {
   const fromSetting = String(settings.remoteRoots ?? '').split(/[;\n]/).map((s) => s.trim()).filter(Boolean)
@@ -84,6 +88,6 @@ rl.on('line', async (line) => {
     out({ id: msg.id, e: e instanceof Error ? e.message : String(e) })
   }
 })
-// SSH dong (Orca/worker thoat) -> dung moi server
+// SSH closed (Orca/worker exited) -> stop all servers
 rl.on('close', () => { core.shutdown(); setTimeout(() => process.exit(0), 1500) })
 log(`agent ${AGENT_VERSION} ready on ${process.platform} ${process.version}`)

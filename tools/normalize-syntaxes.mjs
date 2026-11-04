@@ -1,8 +1,8 @@
-// Chuan hoa grammar/config lay tu VS Code cho bo kiem tra cua Orca:
-//  - bo comment JSONC va dau phay thua trong language-configuration
-//  - surroundingPairs / autoClosingPairs dang mang [a,b] -> {open, close}
-//  - trong "captures", bo cac khoa khong phai so (loi co san o grammar xml/qrc/ui)
-// Dung: node normalize-syntaxes.mjs <thu-muc-syntaxes>
+// Normalizes grammars/configs taken from VS Code so they pass Orca's validator:
+//  - strips JSONC comments and trailing commas in language-configuration
+//  - surroundingPairs / autoClosingPairs as [a,b] arrays -> {open, close}
+//  - in "captures", drops non-numeric keys (an upstream bug in the xml/qrc/ui grammars)
+// Usage: node normalize-syntaxes.mjs <syntaxes-dir>
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 

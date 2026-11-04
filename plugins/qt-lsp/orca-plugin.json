@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "qt-dev-python-lsp",
   "name": "Qt Code Intelligence (Python, QML, C++)",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "execution": "trusted-worker",
   "pluginApi": 1,
   "description": "VS Code-style editor views for Qt developers: Ctrl+Click / F12 to go to definition, hover, completion, diagnostics and semantic colors for Python (basedpyright, auto-selects the project's interpreter), QML (qmlls) and C/C++ (clangd). Works on files of other machines too, over SSH.",
@@ -82,6 +82,13 @@
         "default": "off"
       },
       {
+        "key": "projectEnvironments",
+        "title": "Use project environments",
+        "description": "on (default): pick the project's own venv / conda env, .vscode/settings.json and pyrightconfig like VS Code. Pyright then runs that environment's python to read its library paths, so only open projects you trust. off: use installed Pythons only.",
+        "type": "string",
+        "default": "on"
+      },
+      {
         "key": "pyrightPath",
         "title": "Pyright language server",
         "description": "Path to basedpyright's or pyright's langserver.index.js. Empty: %LOCALAPPDATA%\\orca-qt-lsp, then the global npm folder.",
@@ -117,11 +124,25 @@
         "default": ""
       },
       {
+        "key": "compilerGlobs",
+        "title": "Extra compiler globs for clangd",
+        "description": "clangd only queries compilers from known toolchain folders (Qt, LLVM, Visual Studio, MSYS2, /usr/bin…) for system include paths, never one inside the project. Add other trusted compiler paths here as globs, separated by commas.",
+        "type": "string",
+        "default": ""
+      },
+      {
         "key": "remoteHosts",
         "title": "Extra SSH hosts",
         "description": "Usually empty: when the open file is not on this machine the plugin searches every host in ~/.ssh/config by itself (read-only, in parallel) and remembers the one that has the project. Use the machine button at the bottom of the editor to pick or type a host for a project. Add hosts here only if they are not in ~/.ssh/config (user@host), separated by commas.",
         "type": "string",
         "default": ""
+      },
+      {
+        "key": "autoFindRemote",
+        "title": "Find files on SSH hosts automatically",
+        "description": "on (default): when the open file is not on this machine, look for it read-only on every host in ~/.ssh/config (key login only, at most 40 hosts, files of 64 bytes or more) and start the agent on the host that has it. off: only use the host picked with the machine button.",
+        "type": "string",
+        "default": "on"
       },
       {
         "key": "remoteRoots",

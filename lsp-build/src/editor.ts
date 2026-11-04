@@ -1,6 +1,6 @@
-// Editor LSP cho Orca (Python / QML / C++): Monaco + language server qua worker cua plugin.
-// Ctrl+Click / F12 = di toi dinh nghia; re chuot = kieu + tai lieu; Ctrl+Space = goi y; gach do = loi.
-// Ngon ngu lay tu <html data-lang> cua trang (python.html / qml.html / cpp.html).
+// LSP editor for Orca (Python / QML / C++): Monaco + a language server via the plugin worker.
+// Ctrl+Click / F12 = go to definition; hover = type + docs; Ctrl+Space = completion; red squiggles = errors.
+// The language comes from the page's <html data-lang> (python.html / qml.html / cpp.html).
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js'
 import 'monaco-editor/esm/vs/editor/contrib/gotoSymbol/browser/goToCommands.js'
 import 'monaco-editor/esm/vs/editor/contrib/gotoSymbol/browser/link/goToDefinitionAtPosition.js'
@@ -40,10 +40,10 @@ const setStatus = (text: string, tone: 'ok' | 'warn' | 'err' | 'busy' = 'ok') =>
 }
 const req = <T>(name: string, input: unknown, timeoutMs = 20000) => orca.plugin.request(name as any, input as any, { timeoutMs }) as Promise<T>
 
-// Hien loi yeu cau len thanh trang thai thay vi nuot im lang
-const reportError = (e: unknown) => { setStatus('Lỗi LSP: ' + (e instanceof Error ? e.message : String(e)).slice(0, 200), 'err'); return null }
+// Show request errors in the status bar instead of swallowing them silently
+const reportError = (e: unknown) => { setStatus('LSP error: ' + (e instanceof Error ? e.message : String(e)).slice(0, 200), 'err'); return null }
 
-/** sha1 cua noi dung (CRLF -> LF), cung cach worker bam file tren dia. */
+/** sha1 of the content (CRLF -> LF), hashed the same way the worker hashes files on disk. */
 async function sha1Lf(text: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text.replace(/\r\n/g, '\n')))
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('')
@@ -52,9 +52,9 @@ async function sha1Lf(text: string): Promise<string> {
 const toPos = (p: monaco.Position): Pos => ({ line: p.lineNumber - 1, character: p.column - 1 })
 const toRange = (r: { start: Pos; end: Pos }) => new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1)
 
-// Theme theo Orca, giong cach Orca tu dung cho editor cua no (plugin-monaco-theme.ts):
-// mau cu phap cua Monaco vs/vs-dark, con nen/chu/so dong/con tro/vung chon/popup lay tu bien --orca-*.
-// Frame chi nhan bien --orca-*, khong nhan tokenColors cua theme plugin, nen mau cu phap giu ban dung san.
+// Follow the Orca theme, the same way Orca themes its own editor (plugin-monaco-theme.ts):
+// syntax colors from Monaco vs/vs-dark; background/text/line numbers/cursor/selection/popups from --orca-* variables.
+// The frame only receives --orca-* variables, not the plugin theme's tokenColors, so syntax colors stay built-in.
 const probe = document.createElement('span')
 function cssColor(name: string): string | null {
   const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -114,12 +114,12 @@ function applyTheme() {
 }
 
 async function main() {
-  // Grammar TextMate + theme Dark+/Light+ (giong VS Code); loi thi giu tokenizer co san cua Monaco.
+  // TextMate grammar + Dark+/Light+ theme (as in VS Code); on failure keep Monaco's built-in tokenizer.
   const textMate = installTextMate(LANG)
   const session = await orca.document.session<string>({ debounceMs: 300 })
   await textMate
   const container = document.getElementById('editor')!
-  // URI rieng moi lan nap: tranh trung 'inmemory://model/1' khi frame nap lai.
+  // Unique URI per load: avoids clashing on 'inmemory://model/1' when the frame reloads.
   const mainUri = monaco.Uri.from({ scheme: 'orca-doc', path: '/' + Date.now() + '-' + Math.random().toString(36).slice(2) + ({ python: '.py', qml: '.qml', cpp: '.cpp' } as const)[LANG] })
   const model = monaco.editor.getModel(mainUri) ?? monaco.editor.createModel(session.value, MONACO_LANG, mainUri)
   model.setEOL(session.value.includes('\r\n') ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF)
@@ -139,7 +139,7 @@ async function main() {
     definitionLinkOpensInPeek: false,
     gotoLocation: { multipleDefinitions: 'goto' }
   })
-  // Orca khong giu undo cho custom editor: Monaco tu lo Ctrl+Z.
+  // Orca keeps no undo history for custom editors: Monaco handles Ctrl+Z itself.
 
   let applyingOutside = false
   editor.onDidChangeModelContent(() => {
@@ -153,35 +153,35 @@ async function main() {
     if (view) editor.restoreViewState(view)
     applyingOutside = false
   })
-  // Khong dang ky 'editor.flush' o day: session() da tu xu ly khi Orca luu.
-  // Dang ky them lam gui ban sua 2 lan cung luc -> xung dot -> "Failed to save the file".
+  // Do not register 'editor.flush' here: session() already handles Orca saves.
+  // Registering it too sends the edit twice at once -> conflict -> "Failed to save the file".
 
-  // --- May chua code cua du an (goc duoi ben trai): tu dong, hoac chon may SSH cho du an nay ---
+  // --- Host holding the project's code (bottom left): automatic, or pick an SSH host for this project ---
   const hostBtn = document.getElementById('host') as HTMLButtonElement
   const pickerEl = document.getElementById('picker')!
   const pickerFilter = document.getElementById('picker-filter') as HTMLInputElement
   const pickerList = document.getElementById('picker-list')!
   const showHost = (host: string | null, auto: boolean) => {
     hostBtn.hidden = false
-    hostBtn.textContent = host ? `⇄ ${host}` : '⇄ Máy này'
-    hostBtn.title = (host ? `Code của dự án này nằm trên ${host} (SSH)` : 'Code nằm trên máy đang mở Orca') + (auto ? ' — tự phát hiện' : ' — đã chọn') + '\nBấm để đổi máy cho dự án này'
+    hostBtn.textContent = host ? `⇄ ${host}` : '⇄ This machine'
+    hostBtn.title = (host ? `This project's code is on ${host} (SSH)` : 'Code is on the machine running Orca') + (auto ? ' — auto-detected' : ' — selected') + '\nClick to change the host for this project'
   }
   type HostChoice = { project: string; chosen: string | null; hosts: string[] }
   hostBtn.onclick = async () => {
     const c = await req<HostChoice>('lsp.hostChoice', null, 15000).catch(reportError)
     if (!c) return
     const items: { id: string | null; label: string; hint: string }[] = [
-      { id: null, label: 'Tự động', hint: 'Tìm trên máy này, rồi mọi máy trong ~/.ssh/config; nhớ máy có file' },
-      { id: 'local', label: 'Máy này', hint: 'Chỉ tìm trên máy đang mở Orca' },
+      { id: null, label: 'Automatic', hint: 'Search this machine, then every host in ~/.ssh/config; remember the host that has the file' },
+      { id: 'local', label: 'This machine', hint: 'Only search the machine running Orca' },
       ...c.hosts.map((h) => ({ id: h, label: h, hint: 'SSH' }))
     ]
     let sel = Math.max(0, items.findIndex((i) => i.id === c.chosen))
     pickerFilter.value = ''
-    pickerFilter.placeholder = `Máy chứa code của "${c.project}" — gõ để lọc, hoặc gõ user@host rồi Enter`
+    pickerFilter.placeholder = `Host with the code of "${c.project}" — type to filter, or type user@host and press Enter`
     const render = () => {
       const q = pickerFilter.value.trim().toLowerCase()
       const shown = items.filter((i) => !q || `${i.label} ${i.hint}`.toLowerCase().includes(q))
-      if (q && !shown.some((i) => i.label.toLowerCase() === q)) shown.push({ id: pickerFilter.value.trim(), label: pickerFilter.value.trim(), hint: 'Dùng máy SSH này' })
+      if (q && !shown.some((i) => i.label.toLowerCase() === q)) shown.push({ id: pickerFilter.value.trim(), label: pickerFilter.value.trim(), hint: 'Use this SSH host' })
       sel = Math.min(sel, Math.max(0, shown.length - 1))
       pickerList.replaceChildren(...shown.map((i, n) => {
         const row = document.createElement('div')
@@ -197,9 +197,9 @@ async function main() {
     const pick = async (id: string | null) => {
       pickerEl.hidden = true
       pickerFilter.onkeydown = null; pickerFilter.oninput = null
-      setStatus(id && id !== 'local' ? `Đang kết nối ${id}…` : 'Đang tìm lại file…', 'busy')
+      setStatus(id && id !== 'local' ? `Connecting to ${id}…` : 'Searching for the file again…', 'busy')
       const r = await req<{ ok: boolean; error?: string }>('lsp.setHost', { host: id }, 120000).catch(reportError)
-      if (r && !r.ok) { setStatus(r.error ?? 'Không kết nối được', 'err'); return }
+      if (r && !r.ok) { setStatus(r.error ?? 'Could not connect', 'err'); return }
       location.reload()
     }
     pickerEl.hidden = false
@@ -216,28 +216,28 @@ async function main() {
   }
   void req<HostChoice>('lsp.hostChoice', null, 15000).then((c) => showHost(c.chosen && c.chosen !== 'local' ? c.chosen : null, !c.chosen)).catch(() => showHost(null, true))
 
-  // --- noi voi worker ---
-  setStatus('Đang tìm file trong workspace…', 'busy')
-  // Gui ma bam thay cho ca file: kenh plugin gioi han ~1 MiB/tin (file resources_rc.py 19 MB se loi "message too large").
+  // --- connect to the worker ---
+  setStatus('Looking for the file in the workspace…', 'busy')
+  // Send a hash instead of the whole file: the plugin channel is limited to ~1 MiB per message (a 19 MB resources_rc.py fails with "message too large").
   const lfText = model.getValue().replace(/\r\n/g, '\n')
   const lfBytes = new TextEncoder().encode(lfText).length
   const lineBreaks = (lfText.match(/\n/g) ?? []).length
   const att = await req<AttachOutput>('lsp.attach', { language: LANG, hash: await sha1Lf(lfText), size: lfBytes, sizeCrlf: lfBytes + lineBreaks }, 90000).catch((e) => ({ ok: false, path: null, candidates: 0, workspace: null, server: null, message: String(e) }) as AttachOutput)
-  if (!att.path) { setStatus(att.message ?? 'Không gắn được LSP', 'err'); return }
+  if (!att.path) { setStatus(att.message ?? 'Could not attach LSP', 'err'); return }
   const path = att.path
-  // File o may khac (qua SSH): worker tra duong dan "@<host>:<duong dan>"
+  // File on another host (via SSH): the worker returns the path as "@<host>:<path>"
   const remoteHost = /^@([^:]+):/.exec(path)?.[1]
   const rel = att.workspace ? path.slice(att.workspace.length + 1).replace(/\\/g, '/') : path
   showHost(remoteHost ?? null, true)
   if (!att.ok) { setStatus(`${rel}: ${att.message}`, 'err'); return }
-  setStatus(`${SERVER} • ${rel}${att.server && att.server.includes('(') ? ' • ' + att.server.slice(att.server.indexOf('(') + 1, -1) : ''}${att.candidates > 1 ? ` • ⚠ ${att.candidates} file trùng nội dung, có thể nhận nhầm` : ''}`, att.candidates > 1 ? 'warn' : 'ok')
+  setStatus(`${SERVER} • ${rel}${att.server && att.server.includes('(') ? ' • ' + att.server.slice(att.server.indexOf('(') + 1, -1) : ''}${att.candidates > 1 ? ` • ⚠ ${att.candidates} files with identical content, may be the wrong one` : ''}`, att.candidates > 1 ? 'warn' : 'ok')
 
   let version = 1
-  // File nho: gui noi dung; file lon: worker doc tu dia (luc mo, noi dung editor = noi dung tren dia).
+  // Small file: send the content; large file: the worker reads it from disk (on open, editor content = disk content).
   const SMALL = 400_000
   const openText = model.getValue()
   await req('lsp.open', openText.length <= SMALL ? { path, text: openText, version } : { path, version })
-  /** Gui lai ca noi dung theo doan (khi ban sao cua worker lech). */
+  /** Resend the whole content in chunks (when the worker's copy is out of sync). */
   const resyncFull = async () => {
     const t = model.getValue()
     const v = ++version
@@ -249,9 +249,9 @@ async function main() {
 
   const semEmitter = new monaco.Emitter<void>()
 
-  // --- Interpreter: hien o thanh trang thai, bam de chon (giong "Select Interpreter" cua VS Code) ---
+  // --- Interpreter: shown in the status bar, click to pick (like VS Code's "Select Interpreter") ---
   type Interp = { path: string; label: string; version: string | null; source: string; envDir: string | null }
-  const SOURCE_LABEL: Record<string, string> = { saved: 'đã chọn', setting: 'setting', vscode: '.vscode', pyright: 'pyrightconfig', venv: 'venv dự án', env: 'đang kích hoạt', global: 'cài đặt' }
+  const SOURCE_LABEL: Record<string, string> = { saved: 'selected', setting: 'setting', vscode: '.vscode', pyright: 'pyrightconfig', venv: 'project venv', env: 'activated', global: 'installed' }
   const interpBtn = document.getElementById('interp') as HTMLButtonElement
   const picker = document.getElementById('picker')!
   const filterEl = document.getElementById('picker-filter') as HTMLInputElement
@@ -261,8 +261,8 @@ async function main() {
   let selIndex = 0
   const showInterp = () => {
     interpBtn.hidden = false
-    interpBtn.textContent = current ? `🐍 ${current.label}` : '🐍 Chọn interpreter'
-    interpBtn.title = current ? `${current.path}\nVì sao: ${(current as any).reason ?? SOURCE_LABEL[current.source] ?? current.source}\nBấm để đổi (hoặc Ctrl+Shift+P → Python: Select Interpreter)` : 'Không tìm thấy Python: bấm để chọn'
+    interpBtn.textContent = current ? `🐍 ${current.label}` : '🐍 Select interpreter'
+    interpBtn.title = current ? `${current.path}\nWhy: ${(current as any).reason ?? SOURCE_LABEL[current.source] ?? current.source}\nClick to change (or Ctrl+Shift+P → Python: Select Interpreter)` : 'Python not found: click to select'
   }
   const loadInterps = async () => {
     const r = await req<{ current: Interp | null; list: Interp[] }>('lsp.interpreters', { path }, 30000).catch(reportError)
@@ -273,7 +273,7 @@ async function main() {
   }
   const renderPicker = () => {
     const q = filterEl.value.trim().toLowerCase()
-    const shown = [{ path: '', label: 'Tự động chọn', version: null, source: 'auto', envDir: null } as Interp, ...interps]
+    const shown = [{ path: '', label: 'Select automatically', version: null, source: 'auto', envDir: null } as Interp, ...interps]
       .filter((i) => !q || `${i.label} ${i.path}`.toLowerCase().includes(q))
     selIndex = Math.min(selIndex, Math.max(0, shown.length - 1))
     listEl.replaceChildren(...shown.map((i, n) => {
@@ -283,7 +283,7 @@ async function main() {
       const isCur = !!current && i.path.toLowerCase() === current.path.toLowerCase()
       row.innerHTML = ''
       const b = document.createElement('b'); b.textContent = (isCur ? '✓ ' : '') + i.label
-      const s = document.createElement('small'); s.textContent = i.path || 'Như VS Code: đã chọn → .vscode → venv của dự án (bản Python cao nhất) → Python cài đặt cao nhất'
+      const s = document.createElement('small'); s.textContent = i.path || 'Like VS Code: selected → .vscode → project venv (highest Python) → highest installed Python'
       const t = document.createElement('i'); t.textContent = i.source === 'auto' ? '' : (SOURCE_LABEL[i.source] ?? i.source)
       row.append(b, s, t)
       row.onclick = () => choose(i)
@@ -294,17 +294,17 @@ async function main() {
   const closePicker = () => { picker.hidden = true; editor.focus() }
   const choose = async (i: Interp) => {
     closePicker()
-    setStatus('Đang đổi interpreter…', 'busy')
+    setStatus('Switching interpreter…', 'busy')
     const r = await req<{ current: Interp | null }>('lsp.setInterpreter', { path, interpreter: i.path || null }, 30000).catch(reportError)
     if (!r) return
     current = r.current
     showInterp()
-    setStatus(`${SERVER} • ${rel} • ${current ? current.label : 'không có interpreter'}`, 'ok')
+    setStatus(`${SERVER} • ${rel} • ${current ? current.label : 'no interpreter'}`, 'ok')
     semEmitter.fire()
   }
   interpBtn.onclick = async () => {
     await loadInterps()
-    filterEl.placeholder = 'Chọn interpreter Python (gõ để lọc)…'
+    filterEl.placeholder = 'Select a Python interpreter (type to filter)…'
     filterEl.oninput = () => { selIndex = 0; renderPicker() }
     filterEl.onkeydown = interpKeys
     filterEl.value = ''
@@ -323,12 +323,12 @@ async function main() {
   }
   filterEl.onkeydown = interpKeys
   const restartServer = async () => {
-    setStatus(`Đang khởi động lại ${SERVER}…`, 'busy')
+    setStatus(`Restarting ${SERVER}…`, 'busy')
     const r = await req<{ detail: string }>('lsp.restart', { path }, 90000).catch(reportError)
     if (!r) return
     await resyncFull()
     setStatus(`${SERVER} • ${rel} • ${r.detail}`, 'ok')
-    if (LANG !== 'python') { interpBtn.textContent = `⚙ ${SERVER}`; interpBtn.title = `${r.detail}\nBấm để khởi động lại ${SERVER} (sau khi CMake configure)` }
+    if (LANG !== 'python') { interpBtn.textContent = `⚙ ${SERVER}`; interpBtn.title = `${r.detail}\nClick to restart ${SERVER} (after a CMake configure)` }
     semEmitter.fire()
   }
   editor.addAction({ id: 'qt-lsp.restart', label: `${SERVER}: Restart Language Server`, run: () => restartServer() })
@@ -336,14 +336,14 @@ async function main() {
     editor.addAction({ id: 'qt-lsp.selectInterpreter', label: 'Python: Select Interpreter', run: () => interpBtn.click() })
     void loadInterps()
   } else {
-    // QML / C++: nut hien server + build dir; bam = khoi dong lai server (vd sau khi tao compile_commands.json)
+    // QML / C++: button shows server + build dir; click = restart the server (e.g. after generating compile_commands.json)
     interpBtn.hidden = false
     interpBtn.textContent = `⚙ ${SERVER}`
     interpBtn.onclick = () => restartServer()
-    void req<{ detail: string }>('lsp.serverInfo', { path }).then((i) => { interpBtn.title = `${i.detail}\nBấm để khởi động lại ${SERVER} (sau khi CMake configure)` }).catch(() => {})
+    void req<{ detail: string }>('lsp.serverInfo', { path }).then((i) => { interpBtn.title = `${i.detail}\nClick to restart ${SERVER} (after a CMake configure)` }).catch(() => {})
   }
-  // Gom thay doi theo tung su kien Monaco, gui dang edits (khong gui ca file): file lon van duoi gioi han tin.
-  // Moi su kien: offset tinh tren noi dung truoc su kien; gui theo thu tu de worker ap dung lan luot.
+  // Batch changes per Monaco event and send them as edits (not the whole file): large files stay under the message limit.
+  // Per event, offsets refer to the content before that event; events are sent in order so the worker applies them in sequence.
   type Edit = { offset: number; length: number; text: string }
   let pendingEvents: Edit[][] = []
   let pendingBytes = 0
@@ -362,7 +362,7 @@ async function main() {
     pendingEvents = []
     pendingBytes = 0
     if (!events.length) return
-    // Dan/thay the lon (vd. reload file): gui lai ca file theo doan
+    // Large paste/replace (e.g. file reload): resend the whole file in chunks
     if (big) { await resyncFull(); return }
     for (const edits of events) {
       const r = await req<{ ok: boolean; resync?: boolean }>('lsp.change', { path, edits, version: ++version, expectLength: undefined }).catch(() => ({ ok: false, resync: true }))
@@ -376,7 +376,7 @@ async function main() {
   }
   window.addEventListener('beforeunload', () => { void req('lsp.close', { path }) })
 
-  // Chi phuc vu model cua editor nay (model peek cua thu vien co uri rieng).
+  // Only serve this editor's model (library peek models have their own URIs).
   const isMine = (m: monaco.editor.ITextModel) => m === model
 
   monaco.languages.registerHoverProvider(MONACO_LANG, {
@@ -389,10 +389,10 @@ async function main() {
     }
   })
 
-  // Dinh nghia:
-  //  - cung file: Monaco nhay ngay trong editor;
-  //  - file khac trong workspace: mo tab Orca o file do (Orca chua cho chon dong, nen hien dong o thanh trang thai);
-  //  - thu vien (site-packages, typeshed): mo model chi doc va hien peek ngay trong editor nay.
+  // Definitions:
+  //  - same file: Monaco jumps within the editor;
+  //  - another file in the workspace: open an Orca tab for it (Orca cannot select a line yet, so the line is shown in the status bar);
+  //  - libraries (site-packages, typeshed): open a read-only model and show a peek inside this editor.
   monaco.languages.registerDefinitionProvider(MONACO_LANG, {
     async provideDefinition(m, position) {
       if (!isMine(m)) return null
@@ -402,11 +402,11 @@ async function main() {
       const out: monaco.languages.Location[] = []
       for (const loc of d.locations) {
         if (sameFile(loc.path, path)) { out.push({ uri: model.uri, range: toRange(loc.range) }); continue }
-        // Monaco can mot model that cho moi dich den (ke ca khi minh tu mo tab Orca), neu khong se "Model not found".
-        // Mo duoc thanh tab Orca (file trong workspace, ke ca venv/site-packages cua du an) -> orca-ws; con lai peek
+        // Monaco needs a real model for every target (even when we open an Orca tab ourselves), otherwise "Model not found".
+        // Openable as an Orca tab (file in the workspace, including the project's venv/site-packages) -> orca-ws; otherwise peek
         const toTab = loc.openable ?? loc.inWorkspace
         const scheme = toTab ? 'orca-ws' : 'orca-lib'
-        // File lon chi gui mot cua so dong: moi vung ~2000 dong mot model rieng (query w=) de nhay cho khac van co noi dung
+        // Large files only send a window of lines: one model per ~2000-line region (query w=) so jumps elsewhere still have content
         const uri = monaco.Uri.from({ scheme, path: '/' + loc.path.replace(/\\/g, '/'), query: `w=${Math.floor(loc.range.start.line / 2000)}` })
         let target = monaco.editor.getModel(uri)
         if (!target) {
@@ -423,7 +423,7 @@ async function main() {
   })
   let pendingReveal: { path: string; range: { start: Pos } } | null = null
 
-  // Editor standalone khong tu mo model khac: chan lai de mo tab Orca (workspace) hoac peek (thu vien).
+  // The standalone editor cannot open other models: intercept to open an Orca tab (workspace) or a peek (library).
   const editorService = (editor as any)._codeEditorService
   if (editorService?.openCodeEditor) {
     const original = editorService.openCodeEditor.bind(editorService)
@@ -434,8 +434,8 @@ async function main() {
         const loc = pendingReveal
         pendingReveal = null
         const r = await req<{ opened: boolean; rel?: string }>('lsp.reveal', { path: loc.path, line: loc.range.start.line + 1 }).catch(reportError)
-        if (r?.opened) { setStatus(`Đã mở ${r.rel}, dòng ${loc.range.start.line + 1}`, 'ok'); return null }
-        // Khong mo duoc tab (vd. Orca cu, ngoai workspace): xem nhanh ngay tai cho
+        if (r?.opened) { setStatus(`Opened ${r.rel}, line ${loc.range.start.line + 1}`, 'ok'); return null }
+        // Could not open a tab (e.g. older Orca, outside the workspace): peek in place
         editor.trigger('lsp', 'editor.action.peekDefinition', null)
         return null
       }
@@ -446,8 +446,8 @@ async function main() {
       return null
     }
   }
-  // Semantic tokens (basedpyright): to mau lop/ham/bien/module theo y nghia, giong Pylance trong VS Code.
-  // Legend gui cho Monaco la danh sach selector cua theme; moi token server duoc doi sang selector do.
+  // Semantic tokens (basedpyright): color classes/functions/variables/modules by meaning, like Pylance in VS Code.
+  // The legend given to Monaco is a list of theme selectors; each server token is mapped to one of them.
   const semLegendTokens: string[] = ['']
   const semIndex = new Map<string, number>([['', 0]])
   const semIndexOf = (token: string) => {
@@ -456,8 +456,8 @@ async function main() {
     return i
   }
   for (const t of ['entity.name.namespace', 'entity.name.type', 'support.class', 'entity.name.function', 'variable', 'variable.parameter', 'variable.other.constant', 'variable.language', 'support.function', 'support.type']) semIndexOf(t)
-  // Monaco standalone tat semantic tokens mac dinh (theme.semanticHighlighting=false): bat qua cau hinh.
-  // 'editor.semanticHighlighting' doc tu configurationService, khong phai tuy chon cua editor.
+  // Standalone Monaco disables semantic tokens by default (theme.semanticHighlighting=false): enable via configuration.
+  // 'editor.semanticHighlighting' is read from configurationService, not from the editor options.
   try {
     const cfg = StandaloneServices.get(IConfigurationService) as any
     cfg.updateValues([['editor.semanticHighlighting', { enabled: true }]])
@@ -482,7 +482,7 @@ async function main() {
     },
     releaseDocumentSemanticTokens() {}
   })
-  // Legend co the them token moi trong luc chay: bao Monaco lay lai sau lan dau.
+  // The legend can gain new tokens at runtime: tell Monaco to refetch after the first pass.
   setTimeout(() => semEmitter.fire(), 1500)
   orca.plugin.on('lsp.diagnostics' as any, () => semEmitter.fire())
 
@@ -494,7 +494,7 @@ async function main() {
       const c = await req<CompletionOutput>('lsp.completion', { path, position: toPos(position), trigger: context.triggerCharacter }).catch(reportError)
       const word = m.getWordUntilPosition(position)
       const wordRange = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn)
-      // clangd/qmlls tra range cua textEdit (vd thay ca "->"): dung range do neu co
+      // clangd/qmlls return a textEdit range (e.g. replacing the whole "->"): use it when present
       const rangeOf = (r?: { start: Pos; end: Pos }) => (r ? toRange(r) : wordRange)
       return {
         incomplete: c?.incomplete,
@@ -526,7 +526,7 @@ async function main() {
     })))
     const errs = d.items.filter((x) => x.severity === 1).length
     const warns = d.items.filter((x) => x.severity === 2).length
-    if (statusEl.dataset.tone !== 'err') setStatus(`${SERVER} • ${rel} • ${errs} lỗi, ${warns} cảnh báo`, errs ? 'warn' : 'ok')
+    if (statusEl.dataset.tone !== 'err') setStatus(`${SERVER} • ${rel} • ${errs} errors, ${warns} warnings`, errs ? 'warn' : 'ok')
   }
   void req<DiagnosticsOutput>('lsp.diagnostics', { path }).then(applyDiagnostics).catch(() => {})
   editor.focus()
@@ -546,4 +546,4 @@ function lspKind(k: number): monaco.languages.CompletionItemKind {
   return map[k] ?? K.Text
 }
 
-main().catch((e) => setStatus(`Lỗi: ${e instanceof Error ? e.message : String(e)}`, 'err'))
+main().catch((e) => setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`, 'err'))

@@ -1,7 +1,9 @@
-# Test worker LSP that trong Orca: open -> definition/hover/completion/diagnostics tren samples/demo-app/main.py
+# Tests the real LSP worker in Orca: open -> definition/hover/completion/diagnostics on samples/demo-app/main.py
+# Usage: pwsh lsp-build/dev/e2e-worker.ps1   (plugin loaded with `orca plugin dev`; output in %TEMP%\lsp-e2e.txt)
 $ErrorActionPreference = 'Continue'
+$repo = Resolve-Path "$PSScriptRoot\..\.."
 $key = 'local.qt-dev-python-lsp'
-$path = '<repo>\samples\demo-app\main.py'
+$path = Join-Path $repo 'samples\demo-app\main.py'
 $out = "$env:TEMP\lsp-e2e.txt"
 '' | Set-Content $out
 function Req($name, $obj) {

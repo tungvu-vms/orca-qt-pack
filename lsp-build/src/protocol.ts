@@ -1,26 +1,26 @@
-// Hop dong editor <-> worker cho Qt LSP. Vi tri dung quy uoc LSP (dong/cot tu 0, cot tinh theo UTF-16).
+// Editor <-> worker contract for Qt LSP. Positions follow LSP conventions (0-based line/column, columns in UTF-16 units).
 export interface Pos { line: number; character: number }
 export interface Range { start: Pos; end: Pos }
-/** inWorkspace: file cua du an (khong phai thu vien). openable: nam trong mot workspace Orca -> mo duoc thanh tab (ke ca venv, build). */
+/** inWorkspace: a project file (not a library). openable: inside an Orca workspace -> can be opened as a tab (including venv, build). */
 export interface Loc { path: string; range: Range; inWorkspace: boolean; openable?: boolean }
 
 export type Lang = 'python' | 'qml' | 'cpp'
-/** `hash` = sha1 noi dung (CRLF -> LF), de khong vuot gioi han tin ~1 MiB voi file lon. `text` chi cho ban cu. */
-export interface AttachInput { language: Lang; hash?: string; text?: string; size?: number; sizeCrlf?: number; /** worker -> agent: duong dan workspace Orca biet tren may kia */ hints?: string[] }
+/** `hash` = sha1 of the content (CRLF -> LF), so large files stay under the ~1 MiB message limit. `text` is for older versions only. */
+export interface AttachInput { language: Lang; hash?: string; text?: string; size?: number; sizeCrlf?: number; /** worker -> agent: workspace paths Orca knows on the other machine */ hints?: string[] }
 export interface AttachOutput {
   ok: boolean
-  /** Duong dan tuyet doi file da do ra; null neu khong tim thay */
+  /** Absolute path of the resolved file; null if not found */
   path: string | null
-  /** So file trung noi dung (>1 nghia la do co the nham) */
+  /** Number of files with identical content (>1 means the match may be wrong) */
   candidates: number
   workspace: string | null
   server: string | null
   message?: string
 }
 
-/** Sua doi: offset/length tinh tren noi dung TRUOC khi sua (don vi UTF-16), nhu Monaco IModelContentChange. */
+/** An edit: offset/length refer to the content BEFORE the edit (UTF-16 units), like Monaco's IModelContentChange. */
 export interface TextEdit { offset: number; length: number; text: string }
-/** open: `text` (file nho) hoac bo trong de worker doc tu dia. change: `edits` (+ `expectLength`) hoac `text`. */
+/** open: `text` (small file) or omitted so the worker reads from disk. change: `edits` (+ `expectLength`) or `text`. */
 export interface DocInput { path: string; version: number; text?: string; edits?: TextEdit[]; expectLength?: number }
 export interface PosInput { path: string; position: Pos }
 

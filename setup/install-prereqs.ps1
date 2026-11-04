@@ -1,9 +1,8 @@
-﻿# Kiem tra va cai cac thanh phan ma Qt Developer Pack can tren may thanh vien (Windows).
-# Chay: powershell -ExecutionPolicy Bypass -File setup\install-prereqs.ps1        (khong can quyen Administrator)
-# Bao loi tieng Viet: chay trong Windows Terminal / PowerShell 7 de hien dau dung (conhost cu dung bang ma OEM).
-try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
-# Tuy chon: -SkipPython  bo qua basedpyright (khong dung Python LSP)
+﻿# Checks for and installs what the Qt Developer Pack needs on a Windows machine.
+# Run: powershell -ExecutionPolicy Bypass -File setup\install-prereqs.ps1        (no Administrator rights needed)
+# Option: -SkipPython  skip basedpyright (if you do not use the Python LSP)
 param([switch]$SkipPython)
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 $ErrorActionPreference = 'Stop'
 $ok = @(); $warn = @(); $todo = @()
 function Has($n) { (Get-Command $n -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
@@ -12,48 +11,44 @@ function Has($n) { (Get-Command $n -ErrorAction SilentlyContinue | Select-Object
 $orca = "$env:LOCALAPPDATA\Programs\orca\Orca.exe"
 if (Test-Path $orca) {
   $v = [version]((Get-Item $orca).VersionInfo.ProductVersion)
-  if ($v -ge [version]'1.4.248.0') { $ok += "Orca $v" } else { $todo += "Cập nhật Orca lên >= 1.4.248 (đang $v): Orca → Check for updates" }
-} else { $todo += 'Cài Orca: https://github.com/stablyai/orca/releases (orca-windows-setup.exe)' }
+  if ($v -ge [version]'1.4.248.0') { $ok += "Orca $v" } else { $todo += "Update Orca to >= 1.4.248 (found $v): Orca → Check for updates" }
+} else { $todo += 'Install Orca: https://github.com/stablyai/orca/releases (orca-windows-setup.exe)' }
 
-# --- Git (Orca tai marketplace bang git) ---
-if (Has git) {
-  $ok += "git $((git --version) -replace 'git version ','')"
-  $r = & git ls-remote https://github.com/tungvu-vms/orca-qt-pack.git HEAD 2>&1
-  if ($LASTEXITCODE -eq 0) { $ok += 'Đọc được repo tungvu-vms/orca-qt-pack' }
-  else { $todo += 'Không đọc được repo private: nhờ chủ repo mời làm collaborator, rồi đăng nhập GitHub cho git (gh auth login, hoặc chạy "git ls-remote https://github.com/tungvu-vms/orca-qt-pack.git" để Git Credential Manager hỏi đăng nhập)' }
-} else { $todo += 'Cài Git for Windows: https://git-scm.com/download/win' }
+# --- Git (optional; Orca fetches git catalogs with git) ---
+if (Has git) { $ok += "git $((git --version) -replace 'git version ','')" }
+else { $warn += 'Git not found: install Git for Windows if Orca cannot fetch the catalog (https://git-scm.com/download/win)' }
 
 # --- Python LSP: Node + basedpyright ---
 if (-not $SkipPython) {
   $node = Has node
   if ($node) {
     $nv = [version]((& node --version).TrimStart('v'))
-    if ($nv.Major -lt 20) { $todo += "Node.js $nv quá cũ: cài Node LTS >= 20 (https://nodejs.org)" } else { $ok += "Node.js $nv" }
+    if ($nv.Major -lt 20) { $todo += "Node.js $nv is too old: install Node LTS >= 20 (https://nodejs.org)" } else { $ok += "Node.js $nv" }
     $prefix = Join-Path $env:LOCALAPPDATA 'orca-qt-lsp'
     $bp = Join-Path $prefix 'node_modules\basedpyright\langserver.index.js'
     if (-not (Test-Path $bp)) {
-      Write-Host 'Cài basedpyright vào' $prefix '...'
+      Write-Host 'Installing basedpyright into' $prefix '...'
       New-Item -ItemType Directory -Force $prefix | Out-Null
       & npm install --prefix $prefix basedpyright@1.40.2 --no-audit --no-fund --no-update-notifier --loglevel=error 2>$null
-      if ($LASTEXITCODE -ne 0) { throw 'npm install basedpyright thất bại' }
+      if ($LASTEXITCODE -ne 0) { throw 'npm install basedpyright failed' }
     }
     $ok += "basedpyright: $bp"
-  } else { $todo += 'Python (LSP) cần Node.js LTS >= 20: https://nodejs.org (cài xong chạy lại script này)' }
+  } else { $todo += 'The Python LSP needs Node.js LTS >= 20: https://nodejs.org (then run this script again)' }
 }
 
 # --- Qt: qmlls (QML LSP), Designer/uic/rcc (Qt Tools) ---
 $qmlls = Get-ChildItem 'C:\Qt', "$env:USERPROFILE\Qt" -Recurse -Depth 3 -Filter qmlls.exe -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
-if ($qmlls) { $ok += "qmlls: $($qmlls.FullName)" } else { $warn += 'Chưa có Qt >= 6.5 dưới C:\Qt: QML (LSP) và Qt Tools sẽ không chạy. Cài bằng Qt Online Installer (chọn kit + Qt Creator).' }
+if ($qmlls) { $ok += "qmlls: $($qmlls.FullName)" } else { $warn += 'No Qt >= 6.5 under C:\Qt: the QML LSP and Qt Tools will not work. Install it with the Qt Online Installer (pick a kit + Qt Creator).' }
 
 # --- clangd (C++ LSP) ---
 $clangd = @('C:\Qt\Tools\QtCreator\bin\clang\bin\clangd.exe', "$env:USERPROFILE\Qt\Tools\QtCreator\bin\clang\bin\clangd.exe", 'C:\Program Files\LLVM\bin\clangd.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $clangd) { $clangd = Has clangd }
-if ($clangd) { $ok += "clangd: $clangd" } else { $warn += 'Chưa có clangd: C++ (LSP) sẽ không chạy. Cài Qt Creator (kèm clangd) hoặc LLVM (https://github.com/llvm/llvm-project/releases).' }
+if ($clangd) { $ok += "clangd: $clangd" } else { $warn += 'clangd not found: the C++ LSP will not work. Install Qt Creator (ships clangd) or LLVM (https://github.com/llvm/llvm-project/releases).' }
 
 Write-Host ''
-Write-Host 'Đã có:' -ForegroundColor Green; $ok | ForEach-Object { Write-Host "  ✓ $_" }
-if ($warn) { Write-Host 'Lưu ý:' -ForegroundColor Yellow; $warn | ForEach-Object { Write-Host "  ! $_" } }
-if ($todo) { Write-Host 'Cần làm:' -ForegroundColor Red; $todo | ForEach-Object { Write-Host "  ✗ $_" } }
+Write-Host 'Found:' -ForegroundColor Green; $ok | ForEach-Object { Write-Host "  ✓ $_" }
+if ($warn) { Write-Host 'Warnings:' -ForegroundColor Yellow; $warn | ForEach-Object { Write-Host "  ! $_" } }
+if ($todo) { Write-Host 'To do:' -ForegroundColor Red; $todo | ForEach-Object { Write-Host "  ✗ $_" } }
 Write-Host ''
-Write-Host 'Tiếp theo trong Orca: Settings → Plugins → Marketplaces → Add → https://github.com/tungvu-vms/orca-qt-pack.git (ref main), rồi cài plugin.'
+Write-Host 'Next, in Orca: Settings → Plugins → Add plugin → catalog → https://github.com/tungvu-vms/orca-qt-pack.git, then install the plugins.'
 if ($todo) { exit 1 }

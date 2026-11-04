@@ -1,18 +1,20 @@
-// Chay discoverInterpreters tren cac du an mau, in interpreter duoc chon (dau danh sach) va ca danh sach.
-// Dung: node interp-test.mjs <out.txt>   (build truoc: npx esbuild src/interpreters.ts --bundle --platform=node --format=esm --outfile=dist-test/interpreters.mjs)
+// Runs discoverInterpreters on the sample projects and prints the chosen interpreter (head of the list) plus the full list.
+// Usage: node dev/interp-test.mjs <out.txt>   (run from lsp-build/ after make-interp-fixtures.ps1; build first: npx esbuild src/interpreters.ts --bundle --platform=node --format=esm --outfile=dist-test/interpreters.mjs)
 import { writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { discoverInterpreters } from '../dist-test/interpreters.mjs'
 
-const R = '<repo>\\samples\\interp-cases'
+const REPO = fileURLToPath(new URL('../..', import.meta.url)).replace(/[\\/]+$/, '')
+const R = `${REPO}\\samples\\interp-cases`
 const cases = [
-  ['A khong venv', `${R}\\a-no-venv\\main.py`, `${R}\\a-no-venv`, 'global'],
-  ['B mot .venv', `${R}\\b-one-venv\\main.py`, `${R}\\b-one-venv`, '.venv'],
-  ['C nhieu venv', `${R}\\c-multi\\main.py`, `${R}\\c-multi`, 'c-multi\\venv\\'],
+  ['A no venv', `${R}\\a-no-venv\\main.py`, `${R}\\a-no-venv`, 'global'],
+  ['B one .venv', `${R}\\b-one-venv\\main.py`, `${R}\\b-one-venv`, '.venv'],
+  ['C several venvs', `${R}\\c-multi\\main.py`, `${R}\\c-multi`, 'c-multi\\venv\\'],
   ['D mono/api', `${R}\\d-mono\\svc_api\\app.py`, `${R}\\d-mono`, 'svc_api'],
   ['D mono/ui', `${R}\\d-mono\\svc_ui\\app.py`, `${R}\\d-mono`, 'svc_ui'],
-  ['F long nhau', '<repo>\\samples\\demo-app\\main.py', '<repo>', 'demo-app\\.venv'],
+  ['F nested', `${REPO}\\samples\\demo-app\\main.py`, REPO, 'demo-app\\.venv'],
   ['E vscode setting', `${R}\\e-vscode\\main.py`, `${R}\\e-vscode`, 'envs\\work'],
-  ['demo-app thuc', '<repo>\\samples\\demo-app\\main.py', '<repo>\\samples\\demo-app', '.venv']
+  ['demo-app real', `${REPO}\\samples\\demo-app\\main.py`, `${REPO}\\samples\\demo-app`, '.venv']
 ]
 const out = []
 let fail = 0

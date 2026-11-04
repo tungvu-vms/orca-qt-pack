@@ -1,6 +1,6 @@
-// Tao theme.json / theme-light.json cho Qt Developer Icons:
-// lay theme Material lam nen, them icon Qt cho cac loai file/ten file/thu muc cua du an Qt.
-// Dung: node build-icon-theme.mjs <plugin-dir>
+// Generates theme.json / theme-light.json for Qt Developer Icons:
+// takes the Material theme as the base and adds Qt icons for Qt project file types, file names and folders.
+// Usage: node build-icon-theme.mjs <plugin-dir>
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -10,7 +10,7 @@ const qtExt = {
   qtd: 'qtd', qzt: 'qzt', qdoc: 'qdoc', qdocconf: 'qdoc', qdocinc: 'qdoc'
 }
 const qtFileNames = { qmldir: 'qmldir', 'pysidedeploy.spec': 'pysidedeploy' }
-// dung icon Material co san cho cac loai file khac trong du an Qt
+// reuse existing Material icons for other file types found in Qt projects
 const reuseExt = {
   pro: 'icons/settings.svg', pri: 'icons/settings.svg', prf: 'icons/settings.svg',
   cmake: 'icons/cmake.svg', pyi: 'icons/python.svg', pyw: 'icons/python.svg',
@@ -21,7 +21,7 @@ const reuseNames = {
   'cmakecache.txt': 'icons/cmake.svg', '.qmake.conf': 'icons/settings.svg', 'requirements.txt': 'icons/python-misc.svg',
   'pyproject.toml': 'icons/python-misc.svg'
 }
-// thu muc quen thuoc cua du an Qt -> dung icon thu muc Material gan nghia
+// common Qt project folders -> the closest matching Material folder icon
 const folderMap = {
   qml: 'components', ui: 'components', forms: 'components', resources: 'assets', res: 'assets',
   icons: 'images', translations: 'docs', i18n: 'docs', plugins: 'packages', include: 'lib',
@@ -32,7 +32,7 @@ function build(base, light) {
   const t = JSON.parse(readFileSync(join(dir, 'icons', base), 'utf8'))
   const qt = (name) => {
     const p = `icons/qt/${name}${light ? '_light' : ''}.svg`
-    if (!existsSync(join(dir, p))) throw new Error(`thieu ${p}`)
+    if (!existsSync(join(dir, p))) throw new Error(`missing ${p}`)
     return p
   }
   for (const [e, name] of Object.entries(qtExt)) if (name) t.fileExtensions[e] = qt(name)
@@ -43,8 +43,8 @@ function build(base, light) {
     if (t.folderNames[f]) continue
     if (t.folderNames[like]) { t.folderNames[f] = t.folderNames[like]; t.folderNamesExpanded[f] = t.folderNamesExpanded[like] }
   }
-  // .ts mac dinh la TypeScript; file Linguist nam trong thu muc translations/i18n nen giu nguyen TypeScript
-  // Orca gioi han 512 mapping: bo bot ten file Material (tu cuoi danh sach), giu cac muc cua Qt
+  // .ts defaults to TypeScript; Linguist files live in translations/i18n folders, so keep the TypeScript icon
+  // Orca allows at most 512 mappings: drop Material file names (from the end of the list), keep the Qt entries
   const keep = new Set([...Object.keys(qtFileNames), ...Object.keys(reuseNames)])
   const count = () => ['icons', 'fileNames', 'fileExtensions', 'folderNames', 'folderNamesExpanded']
     .reduce((n, k) => n + Object.keys(t[k]).length, 0)

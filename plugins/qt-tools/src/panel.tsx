@@ -1,4 +1,4 @@
-// Panel Qt Tools: liet ke file Qt cua workspace dang focus, moi file co nut hanh dong.
+// Qt Tools panel: lists the Qt files of the focused workspace, with action buttons for each file.
 import {
   atom, Badge, Button, Callout, EmptyState, Heading, IconButton, List, ListItem, on, plugin, read, Row, set,
   Spinner, Stack, Tab, Tabs, Text, type PanelContext
@@ -23,7 +23,7 @@ async function runAction(action: QtAction, path?: string): Promise<void> {
 }
 
 export function setup(ctx: PanelContext): void {
-  // quet lai khi doi workspace
+  // rescan when the workspace changes
   ctx.subscriptions.push(on('workspace.changed', () => { void scan() }))
   void scan()
 }
@@ -49,7 +49,7 @@ function FileRow({ file }: { file: QtFile }) {
   return (
     <ListItem title={name} description={dir || undefined}>
       <Row gap="xs" wrap>
-        <Button size="sm" variant="ghost" icon="file" onPress={() => runAction('open', file.path)}>Mở</Button>
+        <Button size="sm" variant="ghost" icon="file" onPress={() => runAction('open', file.path)}>Open</Button>
         {ACTIONS[file.kind].map((a) => (
           <Button size="sm" variant="ghost" icon={a.icon} onPress={() => runAction(a.action, file.path)}>{a.label}</Button>
         ))}
@@ -59,7 +59,7 @@ function FileRow({ file }: { file: QtFile }) {
 }
 
 function Files({ p }: { p: ProjectInfo }) {
-  if (!p.files.length) return <EmptyState icon="folder" title="Không thấy file Qt" description="Không có .ui, .qrc, .qml, .ts, .pro hay CMakeLists.txt trong workspace này." />
+  if (!p.files.length) return <EmptyState icon="folder" title="No Qt files found" description="This workspace has no .ui, .qrc, .qml, .ts, .pro or CMakeLists.txt files." />
   return (
     <Stack gap="md">
       {GROUPS.map((g) => {
@@ -71,7 +71,7 @@ function Files({ p }: { p: ProjectInfo }) {
           </List>
         )
       })}
-      {p.truncated ? <Text muted size="xs">Chỉ hiện 400 file đầu tiên.</Text> : null}
+      {p.truncated ? <Text muted size="xs">Showing the first 400 files only.</Text> : null}
     </Stack>
   )
 }
@@ -79,13 +79,13 @@ function Files({ p }: { p: ProjectInfo }) {
 function Toolchain({ p }: { p: ProjectInfo }) {
   return (
     <Stack gap="sm">
-      <List label="Công cụ Qt">
+      <List label="Qt tools">
         {Object.entries(p.tools).map(([name, path]) => (
-          <ListItem title={name} description={path ?? 'Không thấy: đặt "Qt bin folder" trong Settings của plugin'} icon={path ? 'check' : 'warning'} />
+          <ListItem title={name} description={path ?? 'Not found: set "Qt bin folder" in the plugin settings'} icon={path ? 'check' : 'warning'} />
         ))}
-        <ListItem title="python" description={p.python ?? 'python trên PATH'} icon="code" />
+        <ListItem title="python" description={p.python ?? 'python on PATH'} icon="code" />
       </List>
-      <Text muted size="xs">Binding: {p.binding}. Đổi trong Settings → Plugins → Qt Developer Tools.</Text>
+      <Text muted size="xs">Binding: {p.binding}. Change it in Settings → Plugins → Qt Developer Tools.</Text>
     </Stack>
   )
 }
@@ -100,12 +100,12 @@ export default function Panel() {
         <Heading>{p?.workspaceName ?? 'Qt Tools'}</Heading>
         <Row gap="xs">
           {p ? <Badge tone="accent">{p.files.length}</Badge> : null}
-          <IconButton icon="refresh" label="Quét lại" onPress={scan} />
+          <IconButton icon="refresh" label="Rescan" onPress={scan} />
         </Row>
       </Row>
       {s ? <Callout tone={s.ok ? 'success' : 'danger'}>{s.message}</Callout> : null}
-      {busy && !p ? <Spinner label="Đang quét dự án" /> : null}
-      {p && !p.workspaceId ? <EmptyState icon="folder" title="Chưa chọn workspace" description="Mở một workspace trong Orca để thấy file Qt của nó." /> : null}
+      {busy && !p ? <Spinner label="Scanning project" /> : null}
+      {p && !p.workspaceId ? <EmptyState icon="folder" title="No workspace selected" description="Open a workspace in Orca to see its Qt files." /> : null}
       {p && p.workspaceId ? (
         <Tabs label="Qt Tools" value={read(tab)} onChange={(v) => set(tab, v)}>
           <Tab value="files" label="Files"><Files p={p} /></Tab>

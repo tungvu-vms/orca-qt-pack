@@ -1,7 +1,7 @@
-// Cau hinh tung language server: tim chuong trinh, tham so dong lenh, goc du an, cau hinh workspace.
-//   Python  : basedpyright (uu tien) / Pyright           — chay bang node
-//   QML     : qmlls cua Qt (C:\Qt\<ban>\<kit>\bin)        — them -b <build dir> de thay module QML cua du an
-//   C/C++   : clangd (Qt Creator, LLVM, PATH)            — --compile-commands-dir=<build dir> co compile_commands.json
+// Per-language server setup: locating the program, command-line arguments, project root, workspace config.
+//   Python  : basedpyright (preferred) / Pyright         — run with node
+//   QML     : Qt's qmlls (C:\Qt\<version>\<kit>\bin)     — adds -b <build dir> to see the project's QML modules
+//   C/C++   : clangd (Qt Creator, LLVM, PATH)            — --compile-commands-dir=<build dir> with compile_commands.json
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
@@ -30,7 +30,7 @@ const pathDirs = () => (process.env.PATH ?? process.env.Path ?? '').split(WIN ? 
 const exe = (name: string) => (WIN ? `${name}.exe` : name)
 const lower = (p: string) => (WIN ? p.toLowerCase() : p)
 
-/** Cac thu muc bin cua Qt da cai, ban moi nhat truoc (C:\Qt\6.12.0\mingw_64\bin, ~/Qt/...). */
+/** Bin folders of installed Qt versions, newest first (C:\Qt\6.12.0\mingw_64\bin, ~/Qt/...). */
 export function qtBinDirs(extra?: string): string[] {
   const out: string[] = []
   if (extra) out.push(extra)
@@ -76,14 +76,14 @@ export function findClangd(configured: string): string | null {
       const inst = join(vsc, d, 'install')
       for (const v of (existsSync(inst) ? readdirSync(inst) : [])) c.push(join(inst, v, `clangd_${v}`, 'bin', exe('clangd')))
     }
-  } catch { /* khong co */ }
+  } catch { /* none */ }
   return firstExisting(c)
 }
 
 const BUILD_DIR_RE = /^(build|out|cmake-build-.*|build-.*|_build)$/i
 
-/** Thu muc build cua du an: noi co compile_commands.json (C++) hoac module QML da sinh (QML).
- *  Tim trong goc du an va cac thu muc build quen thuoc, sau 2 cap; thu muc sua gan nhat truoc. */
+/** Project build folders: where compile_commands.json (C++) or generated QML modules (QML) live.
+ *  Searches the project root and well-known build folders, 2 levels deep; most recently modified first. */
 export function findBuildDirs(root: string, want: 'compile_commands' | 'qml'): string[] {
   const hits: { dir: string; mtime: number }[] = []
   const check = (dir: string) => {
@@ -94,7 +94,7 @@ export function findBuildDirs(root: string, want: 'compile_commands' | 'qml'): s
       } else if (existsSync(join(dir, 'CMakeCache.txt')) || existsSync(join(dir, 'qmldir'))) {
         hits.push({ dir, mtime: statSync(dir).mtimeMs })
       }
-    } catch { /* bo qua */ }
+    } catch { /* ignore */ }
   }
   if (want === 'compile_commands') check(root)
   let names: string[] = []
@@ -104,7 +104,7 @@ export function findBuildDirs(root: string, want: 'compile_commands' | 'qml'): s
     const d = join(root, n)
     try { if (!statSync(d).isDirectory()) continue } catch { continue }
     check(d)
-    // build/<preset hoac kit>/ (CMake presets, Qt Creator)
+    // build/<preset or kit>/ (CMake presets, Qt Creator)
     try { for (const s of readdirSync(d)) { const sd = join(d, s); try { if (statSync(sd).isDirectory()) check(sd) } catch { /* */ } } } catch { /* */ }
   }
   return hits.sort((a, b) => b.mtime - a.mtime).map((h) => h.dir)
@@ -112,13 +112,13 @@ export function findBuildDirs(root: string, want: 'compile_commands' | 'qml'): s
 
 const PROJECT_MARKERS: Record<Lang, string[]> = {
   python: ['pyrightconfig.json', 'pyproject.toml', 'setup.py', 'setup.cfg', '.git'],
-  // QML/C++: du an CMake/qmake (CMakeLists.txt sau nhat co project()), .qmlls.ini, compile_commands, .git
+  // QML/C++: CMake/qmake project (deepest CMakeLists.txt with project()), .qmlls.ini, compile_commands, .git
   qml: ['.qmlls.ini', 'CMakeLists.txt', '.git'],
   cpp: ['compile_commands.json', '.clangd', 'compile_flags.txt', 'CMakeLists.txt', '.git']
 }
 
-/** Goc du an cua file cho tung ngon ngu, khong vuot `limit` (goc workspace).
- *  C++/QML: CMakeLists.txt CAO nhat trong chuoi thu muc (du an cha chua cac thu muc con add_subdirectory). */
+/** Project root of a file per language, not past `limit` (the workspace root).
+ *  C++/QML: the HIGHEST CMakeLists.txt in the folder chain (the parent project that add_subdirectory()s the children). */
 export function projectRootFor(lang: Lang, file: string, limit: string): string {
   const stop = lower(resolve(limit))
   const chain: string[] = []
@@ -130,12 +130,12 @@ export function projectRootFor(lang: Lang, file: string, limit: string): string 
     dir = up
   }
   if (lang === 'python') {
-    // Giong VS Code/PET: thu muc co marker du an hoac co venv con (pyvenv.cfg) la mot du an.
+    // Like VS Code/PET: a folder with a project marker or a child venv (pyvenv.cfg) is a project.
     const hasVenv = (d: string) => { try { return readdirSync(d).some((n) => existsSync(join(d, n, 'pyvenv.cfg'))) } catch { return false } }
     for (const d of chain) if (PROJECT_MARKERS.python.some((m) => existsSync(join(d, m))) || hasVenv(d)) return d
     return resolve(limit)
   }
-  // Uu tien file cau hinh rieng (.qmlls.ini/.clangd/compile_commands) gan nhat; neu khong, CMakeLists.txt cao nhat lien tiep.
+  // Prefer the nearest dedicated config file (.qmlls.ini/.clangd/compile_commands); otherwise the highest contiguous CMakeLists.txt.
   const strong = lang === 'qml' ? ['.qmlls.ini'] : ['compile_commands.json', '.clangd', 'compile_flags.txt']
   for (const d of chain) if (strong.some((m) => existsSync(join(d, m)))) return d
   let top: string | null = null

@@ -1,5 +1,5 @@
-// Kiem tra grammar: tokenize file mau bang vscode-textmate, in % token co scope rieng (khong chi la scope goc).
-// Dung: node tokenize-check.mjs <plugin-dir> <file> [<file> ...]
+// Grammar check: tokenizes sample files with vscode-textmate and prints the % of tokens with their own scope (not just the root scope).
+// Usage: node tokenize-check.mjs <plugin-dir> <file> [<file> ...]
 import { readFileSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { createRequire } from 'node:module'
@@ -34,9 +34,9 @@ function pick(file) {
 let failed = false
 for (const file of files) {
   const s = pick(file)
-  if (!s) { console.log(`${basename(file)}: KHONG CO syntax nao nhan`); failed = true; continue }
+  if (!s) { console.log(`${basename(file)}: NO syntax matches this file`); failed = true; continue }
   const grammar = await registry.loadGrammar(s.scopeName)
-  if (!grammar) { console.log(`${basename(file)}: khong nap duoc ${s.scopeName}`); failed = true; continue }
+  if (!grammar) { console.log(`${basename(file)}: could not load ${s.scopeName}`); failed = true; continue }
   let stack = vsctm.INITIAL, total = 0, scoped = 0
   const seen = new Set()
   for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
@@ -51,6 +51,6 @@ for (const file of files) {
   }
   const pct = total ? Math.round((100 * scoped) / total) : 0
   if (pct < 40) failed = true
-  console.log(`${basename(file).padEnd(18)} ${s.id.padEnd(16)} ${String(pct).padStart(3)}% token co mau  [${[...seen].slice(0, 8).join(', ')}]`)
+  console.log(`${basename(file).padEnd(18)} ${s.id.padEnd(16)} ${String(pct).padStart(3)}% tokens colored  [${[...seen].slice(0, 8).join(', ')}]`)
 }
 process.exit(failed ? 1 : 0)

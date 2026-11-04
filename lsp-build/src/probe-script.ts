@@ -1,7 +1,7 @@
-// Script do tim file tren may khac, chay qua `ssh host node -` (chi doc, khong ghi gi len may kia).
-// Du lieu vao: bien Q (base64 JSON) dat o dau script. In ra "QTLSP-FOUND {path,root}" hoac "QTLSP-NONE".
-// Quet theo chieu rong: thu muc goi y (workspace Orca tren may kia), thu muc dung truoc day, roi home;
-// chi bam (sha1, CRLF -> LF, bo BOM) nhung file co dung kich thuoc.
+// Script that searches for a file on another host, run via `ssh host node -` (read-only, writes nothing there).
+// Input: variable Q (base64 JSON) prepended to the script. Prints "QTLSP-FOUND {path,root}" or "QTLSP-NONE".
+// Breadth-first scan: hinted folders (Orca workspaces on that host), previously used folders, then home;
+// only files with a matching size are hashed (sha1, CRLF -> LF, BOM stripped).
 export const PROBE_SCRIPT = String.raw`
 const fs=require('fs'),path=require('path'),os=require('os'),crypto=require('crypto');
 const A=JSON.parse(Buffer.from(Q,'base64').toString());
@@ -9,7 +9,8 @@ const sizes=new Set(A.sizes),SK=new Set(A.skip),ext=new RegExp(A.ext,'i');
 const roots=[...A.hints,...A.roots];
 try{const st=JSON.parse(fs.readFileSync(path.join(os.homedir(),'.orca-qt-lsp','state.json'),'utf8'));roots.push(...(st.roots||[]))}catch{}
 const win=process.platform==='win32';
-try{const o=require('child_process').execSync(win?'orca.cmd worktree list --json':'orca worktree list --json',{encoding:'utf8',timeout:8000,stdio:['ignore','pipe','ignore'],maxBuffer:64<<20,windowsHide:true});
+const cli=win?path.join(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local'),'Programs','orca','resources','bin','orca.exe'):process.platform==='darwin'?'/Applications/Orca.app/Contents/Resources/bin/orca':'';
+try{if(!cli||!fs.existsSync(cli))throw 0;const o=require('child_process').execFileSync(cli,['worktree','list','--json'],{encoding:'utf8',timeout:8000,stdio:['ignore','pipe','ignore'],maxBuffer:64<<20,windowsHide:true});
  for(const w of (JSON.parse(o).result||{}).worktrees||[])if(!w.hostId||w.hostId==='local')roots.push(w.path)}catch{}
 roots.push(os.homedir());
 if(win){for(const d of 'CDEFGH')roots.push(d+':\\')}else{for(const d of ['/data','/srv','/opt','/workspace','/work','/projects'])roots.push(d)}
@@ -30,7 +31,7 @@ console.log('QTLSP-NONE');
 
 export interface ProbeQuery { hash: string; sizes: number[]; ext: string; hints: string[]; roots: string[]; skip: string[]; ms: number }
 
-/** Duoi file theo ngon ngu (regex dang chuoi) va thu muc bo qua khi do tim. */
+/** File extensions per language (regex as a string) and folders skipped while searching. */
 export const EXT_RE: Record<string, string> = {
   python: '\\.(py|pyi|pyw)$',
   qml: '\\.qml$',

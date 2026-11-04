@@ -1,4 +1,5 @@
-// Kiem tra: tokenize main.py bang MagicPython, chon selector theo theme Dark+ giong textmate.ts, in mau tung token.
+// Check: tokenizes a Python file with MagicPython, picks Dark+ theme selectors the way textmate.ts does, and writes each token's color.
+// Usage: node dev/check-colors.mjs <file.py> <out.txt>   (run from lsp-build/)
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)

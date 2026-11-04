@@ -1,4 +1,4 @@
-// Kich ban cho `orca plugin check`: panel voi workspace co du loai file Qt.
+// Scenarios for `orca plugin check`: the panel with a workspace holding every kind of Qt file.
 import { defineCheck } from 'orca/testing'
 import type { ProjectInfo } from './protocol'
 

@@ -1,7 +1,7 @@
-// Loi chung cua Qt LSP: chay language server cho Python (basedpyright), QML (qmlls) va C/C++ (clangd),
-// do ra duong dan file dang mo (editor khong biet path), chuyen yeu cau tu editor sang server.
-// Moi (ngon ngu, goc du an) mot server. Chay trong worker Orca (file tren may nay) va trong agent
-// tu xa qua SSH (file tren may kia) - moi thu rieng cua Orca nam trong CoreEnv.
+// Shared Qt LSP core: runs language servers for Python (basedpyright), QML (qmlls) and C/C++ (clangd),
+// resolves the path of the open file (the editor does not know it) and forwards editor requests to the server.
+// One server per (language, project root). Runs in the Orca worker (local files) and in the remote
+// agent over SSH (files on the other machine) - everything Orca-specific lives in CoreEnv.
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
@@ -16,12 +16,12 @@ import type {
 } from './protocol'
 
 const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', 'env', 'dist', '.orca', '.mypy_cache', '.pytest_cache', 'site-packages', '.cache', '.qtc_clangd',
-  // workspace la thu muc home (vd. /Users/<ten>): bo qua thu muc he thong/media lon
+  // workspace is the home folder (e.g. /Users/<name>): skip large system/media folders
   'Library', 'Applications', 'AppData', 'Movies', 'Music', 'Pictures', 'Downloads', '$Recycle.Bin'])
 const sha = (s: string) => createHash('sha1').update(s.replace(/\r\n/g, '\n')).digest('hex')
 const WIN = process.platform === 'win32'
 
-/** Thu muc chua chuong trinh (plugin: <plugin>/worker/worker.mjs; agent: ~/.orca-qt-lsp/agent-*.mjs). */
+/** Folder containing the program (plugin: <plugin>/worker/worker.mjs; agent: ~/.orca-qt-lsp/agent-*.mjs). */
 const pluginDir = () => process.env.QT_LSP_DIR || resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 interface Server {
@@ -32,9 +32,9 @@ interface Server {
   open: Map<string, number>
   diagnostics: Map<string, DiagnosticsOutput>
   legend: { tokenTypes: string[]; tokenModifiers: string[] } | null
-  /** Python: interpreter dang dung */
+  /** Python: interpreter in use */
   interpreter: Interpreter | null
-  /** Thong tin hien thi (build dir dung cho clangd/qmlls...) */
+  /** Display info (build dir used by clangd/qmlls...) */
   detail: string
 }
 
@@ -51,11 +51,11 @@ export interface CoreEnv {
   setting<T>(key: string, fallback: T): Promise<T>
   storageGet(key: string): Promise<unknown>
   storageSet(key: string, value: unknown): Promise<void>
-  /** Cac thu muc goc (workspace) tren may nay, workspace dang focus (neu biet) truoc. */
+  /** Workspace root folders on this machine, the focused workspace (if known) first. */
   roots(hints?: string[]): Promise<{ focused: string | null; roots: string[] }>
-  /** Mo file trong tab Orca; khong co (agent) thi editor tu xu ly. */
+  /** Open a file in an Orca tab; when absent (agent) the editor handles it. */
   reveal?(path: string, line: number): Promise<{ opened: boolean; rel?: string; reason?: string }>
-  /** Agent tu xa: cai basedpyright neu may do chua co; tra ve langserver.index.js. */
+  /** Remote agent: install basedpyright if that machine lacks it; returns langserver.index.js. */
   installPyright?(): Promise<string | null>
 }
 export interface Core {
@@ -75,14 +75,14 @@ export function createCore(host: CoreEnv): Core {
   }
 
 
-  /** Chi muc RE theo kich thuoc file (khong doc noi dung): "size:<bytes>" -> duong dan.
-   *  Du an lon (a large project: 10k thu muc, 8.7k file nguon, 127 MB) bam het mat ~11 s/workspace va vuot gioi han so file;
-   *  nen chi bam nhung file cung kich thuoc voi file dang mo (thuong 1-3 file).
-   *  Thu muc build sinh ra bi bo qua khi quet. */
+  /** Cheap index by file size (contents not read): "size:<bytes>" -> paths.
+   *  Hashing every file of a large project (10k folders, 8.7k source files, 127 MB) takes ~11 s per workspace
+   *  and exceeds the file limit, so only files with the same size as the open file are hashed (usually 1-3).
+   *  Generated build folders are skipped while scanning. */
   const MAX_FILES = 200000
   const skipDir = (n: string) => SKIP.has(n) || n.startsWith('.') || /^(build|out|cmake-build-)/i.test(n)
-  /** Quet theo chieu rong (thu muc nong truoc): workspace co the la ca thu muc home.
-   *  `match` duoc goi cho tung file; tra ve true thi dung som (khong luu chi muc do chua day du). */
+  /** Breadth-first scan (shallow folders first): the workspace may be the whole home folder.
+   *  `match` is called for each file; returning true stops early (the index is not saved since it is incomplete). */
   function scan(root: string, match?: (full: string, size: number) => boolean): string | null {
     const cached = hashIndex.get(root)
     if (cached && Date.now() - cached.at < 300000) return null
@@ -115,12 +115,12 @@ export function createCore(host: CoreEnv): Core {
     hashIndex.set(root, { at: Date.now(), byHash: bySize })
     return null
   }
-  /** Chi muc theo kich thuoc file (chi stat, khong doc noi dung): "size:<bytes>" -> duong dan. */
+  /** Index by file size (stat only, contents not read): "size:<bytes>" -> paths. */
   function indexFor(root: string): Map<string, string[]> {
     scan(root)
     return hashIndex.get(root)?.byHash ?? new Map()
   }
-  /** Bam noi dung co cache theo (duong dan, mtime, size). */
+  /** Content hash, cached by (path, mtime, size). */
   const hashCache = new Map<string, { mtime: number; size: number; h: string }>()
   function fileHash(p: string): string | null {
     try {
@@ -140,17 +140,18 @@ export function createCore(host: CoreEnv): Core {
   }
   async function interpretersFor(root: string, file?: string): Promise<Interpreter[]> {
     const saved = (await savedInterpreters())[norm(root)]
-    return discoverInterpreters(file ?? join(root, '__init__.py'), root, { saved, setting: await setting('python', '') })
+    const projectEnvs = String(await setting('projectEnvironments', 'on')).trim().toLowerCase() !== 'off'
+    return discoverInterpreters(file ?? join(root, '__init__.py'), root, { saved, setting: await setting('python', ''), projectEnvs })
   }
 
-  // ---------- Tim chuong trinh ----------
+  // ---------- Locate programs ----------
   function findNode(): string {
     const exe = WIN ? 'node.exe' : 'node'
     for (const dir of (process.env.PATH ?? process.env.Path ?? '').split(WIN ? ';' : ':')) if (dir && existsSync(join(dir, exe))) return join(dir, exe)
     for (const c of WIN ? ['C:\\Program Files\\nodejs\\node.exe'] : ['/usr/local/bin/node', '/opt/homebrew/bin/node', '/usr/bin/node']) if (existsSync(c)) return c
     return process.execPath
   }
-  /** Noi tu cai basedpyright tren may nay: %LOCALAPPDATA%orca-qt-lsp (Windows), ~/.local/share/orca-qt-lsp (macOS/Linux). */
+  /** Where basedpyright is auto-installed on this machine: %LOCALAPPDATA%orca-qt-lsp (Windows), ~/.local/share/orca-qt-lsp (macOS/Linux). */
   function pyrightPrefix(): string {
     const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir()
     return join(process.env.LOCALAPPDATA ?? (WIN ? join(h, 'AppData', 'Local') : join(h, '.local', 'share')), 'orca-qt-lsp')
@@ -165,33 +166,41 @@ export function createCore(host: CoreEnv): Core {
     return c.find((p) => existsSync(p)) ?? null
   }
 
-  /** Lenh chay server cho (lang, root). Nem loi de hien tren thanh trang thai neu thieu chuong trinh. */
+  /** Command that runs the server for (lang, root). Throws (shown in the status bar) when the program is missing. */
   async function commandFor(lang: Lang, root: string): Promise<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv; detail: string }> {
     if (lang === 'python') {
       const entry = (await setting('pyrightPath', '')) || pyrightEntry() || await (host.installPyright ? host.installPyright() : installPyright(pyrightPrefix(), findNode(), host.log))
-      if (!entry) throw new Error(`Không tìm thấy basedpyright/Pyright trên máy ${process.platform}. Cài (cần Node.js 18+ kèm npm): npm i --prefix ${WIN ? '"%LOCALAPPDATA%\\orca-qt-lsp"' : '~/.local/share/orca-qt-lsp'} basedpyright@1.40.2`)
+      if (!entry) throw new Error(`basedpyright/Pyright not found on this ${process.platform} machine. Install it (needs Node.js 18+ with npm): npm i --prefix ${WIN ? '"%LOCALAPPDATA%\\orca-qt-lsp"' : '~/.local/share/orca-qt-lsp'} basedpyright@1.40.2`)
       const node = (await setting('nodePath', '')) || findNode()
       return { cmd: node, args: [entry, '--stdio'], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, detail: entry.includes('basedpyright') ? 'basedpyright' : 'pyright' }
     }
     if (lang === 'qml') {
       const qmlls = findQmlls(await setting('qmllsPath', ''), await setting('qtBin', ''))
-      if (!qmlls) throw new Error('Không tìm thấy qmlls (Qt 6.4+). Đặt "qmlls path" hoặc "Qt bin folder" trong Settings của plugin.')
+      if (!qmlls) throw new Error('qmlls (Qt 6.4+) not found. Set "qmlls path" or "Qt bin folder" in the plugin Settings.')
       const args: string[] = []
       const builds = findBuildDirs(root, 'qml')
       for (const b of builds.slice(0, 1)) args.push('-b', b)
-      // Thu muc module QML cua Qt di kem qmlls (khi qmlls nam ngoai bin cua kit)
+      // Qt's QML module folder next to qmlls (when qmlls lives outside the kit's bin)
       const qmlDir = join(dirname(dirname(qmlls)), 'qml')
       if (existsSync(qmlDir)) args.push('-I', qmlDir)
-      return { cmd: qmlls, args, detail: builds[0] ? `build: ${builds[0].slice(root.length + 1) || '.'}` : 'chưa có thư mục build (chạy CMake configure để qmlls thấy module của dự án)' }
+      return { cmd: qmlls, args, detail: builds[0] ? `build: ${builds[0].slice(root.length + 1) || '.'}` : 'no build folder yet (run CMake configure so qmlls can see the project modules)' }
     }
     const clangd = findClangd(await setting('clangdPath', ''))
-    if (!clangd) throw new Error('Không tìm thấy clangd. Cài LLVM hoặc Qt Creator, hoặc đặt "clangd path" trong Settings.')
+    if (!clangd) throw new Error('clangd not found. Install LLVM or Qt Creator, or set "clangd path" in Settings.')
     const args = ['--background-index', '--clang-tidy=false', '--header-insertion=never', '--completion-style=detailed', '--log=error', '--pch-storage=memory']
     const cc = findBuildDirs(root, 'compile_commands')
     if (cc[0]) args.push(`--compile-commands-dir=${cc[0]}`)
-    // Cho clangd hoi compiler trong compile_commands (MinGW g++ cua Qt...) de lay include he thong dung.
-    args.push('--query-driver=**/*g++*,**/*gcc*,**/*c++*,**/*cc.exe,**/*clang++*,**/*clang*,**/cl.exe')
-    return { cmd: clangd, args, detail: cc[0] ? `compile_commands: ${cc[0].slice(root.length + 1) || '.'}` : 'chưa có compile_commands.json (CMake configure với CMAKE_EXPORT_COMPILE_COMMANDS=ON)' }
+    // clangd runs the compiler named in compile_commands.json to read its system include paths. Allow only
+    // compilers from toolchain install folders, never one inside the opened project (a cloned repo could
+    // point compile_commands.json at its own "compiler").
+    const drivers = WIN
+      ? ['C:/Qt/Tools/**/bin/*.exe', 'C:/Program Files/LLVM/bin/*.exe', 'C:/Program Files/Microsoft Visual Studio/**/bin/**/cl.exe',
+          'C:/Program Files (x86)/Microsoft Visual Studio/**/bin/**/cl.exe', 'C:/msys64/*/bin/*.exe', 'C:/mingw*/bin/*.exe']
+      : ['/usr/bin/*', '/usr/local/bin/*', '/opt/homebrew/bin/*', '/opt/homebrew/opt/llvm/bin/*', '/Library/Developer/CommandLineTools/usr/bin/*',
+          '/Applications/Xcode*.app/Contents/Developer/Toolchains/**/bin/*', `${homedir()}/Qt/Tools/**/bin/*`]
+    const extra = String(await setting('compilerGlobs', '')).split(/[;,\n]/).map((x) => x.trim()).filter(Boolean)
+    args.push(`--query-driver=${[...drivers, ...extra].join(',')}`)
+    return { cmd: clangd, args, detail: cc[0] ? `compile_commands: ${cc[0].slice(root.length + 1) || '.'}` : 'no compile_commands.json yet (run CMake configure with CMAKE_EXPORT_COMPILE_COMMANDS=ON)' }
   }
 
   // ---------- Server ----------
@@ -216,7 +225,7 @@ export function createCore(host: CoreEnv): Core {
         const py = srv.interpreter?.path
         if (it.section === 'python') return py ? { pythonPath: py, defaultInterpreterPath: py } : {}
         if (it.section === 'python.analysis' || it.section === 'basedpyright.analysis') {
-          // Mac dinh 'off' giong Pylance cua VS Code: chi bao loi cu phap/import, khong soi kieu.
+          // Default 'off' like VS Code's Pylance: only syntax/import errors, no type checking.
           return { typeCheckingMode: typeMode, diagnosticMode: 'openFilesOnly', autoSearchPaths: true, useLibraryCodeForTypes: true, autoImportCompletions: true }
         }
         return {}
@@ -234,7 +243,7 @@ export function createCore(host: CoreEnv): Core {
         items: p.diagnostics.map((d) => ({ range: d.range, severity: d.severity ?? 1, message: d.message, source: d.source ?? SERVER_LABEL[lang], code: typeof d.code === 'object' ? d.code?.value : d.code }))
       }
       srv.diagnostics.set(norm(path), out)
-      // Tin post gioi han 256 KiB: chi day toi da 300 loi, cat moi thong bao 500 ky tu
+      // Posted messages are limited to 256 KiB: push at most 300 diagnostics, each message cut to 500 chars
       host.post('lsp.diagnostics', { path, version: out.version, items: out.items.slice(0, 300).map((d) => ({ ...d, message: String(d.message).slice(0, 500) })) })
     })
     const rootUri = pathToFileURL(root).href
@@ -280,7 +289,7 @@ export function createCore(host: CoreEnv): Core {
   const attachedRoots = new Map<string, string>()
   const uriOf = (path: string) => pathToFileURL(path).href
 
-  /** Goc du an cua file cho ngon ngu `lang`: workspace Orca chua file (dai nhat), roi goc du an ben trong. */
+  /** Project root of a file for `lang`: the (longest) Orca workspace containing it, then the project root inside it. */
   async function rootForFile(lang: Lang, path: string): Promise<string | null> {
     const hit = attachedRoots.get(`${lang}|${norm(path)}`)
     if (hit) return hit
@@ -298,15 +307,15 @@ export function createCore(host: CoreEnv): Core {
   }
   async function serverForPath(path: string): Promise<Server> {
     const lang = langOfPath(path)
-    if (!lang) throw new Error(`Không hỗ trợ loại file ${path}`)
+    if (!lang) throw new Error(`Unsupported file type: ${path}`)
     const r = await rootForFile(lang, path)
-    if (!r) throw new Error(`Không tìm thấy workspace chứa ${path}`)
+    if (!r) throw new Error(`No workspace contains ${path}`)
     const srv = await serverFor(lang, r, path)
     if (!srv.open.has(norm(path))) {
       try {
         srv.client.notify('textDocument/didOpen', { textDocument: { uri: uriOf(path), languageId: LANGUAGE_ID[lang](path), version: 0, text: readFileSync(path, 'utf8') } })
         srv.open.set(norm(path), 0)
-      } catch { /* server tu doc tu dia */ }
+      } catch { /* the server reads it from disk */ }
     }
     return srv
   }
@@ -316,19 +325,19 @@ export function createCore(host: CoreEnv): Core {
     const listed = await host.roots(input.hints).catch(() => ({ focused: null, roots: [] as string[] }))
     const focused = listed.focused
     const known = [...servers.values()].map((s) => s.root)
-    // Workspace dang focus truoc (tab vua mo thuong thuoc workspace nay), roi workspace da co server, roi cac workspace khac.
+    // Focused workspace first (a newly opened tab usually belongs to it), then workspaces with a server, then the rest.
     const roots = [focused, ...known, ...listed.roots.map((w) => resolve(w))]
       .filter((r, i, a): r is string => !!r && a.findIndex((x) => x && norm(x) === norm(r)) === i)
-    // Editor gui ma bam (file lon vuot gioi han 1 MiB cua kenh plugin); ban cu gui ca text.
+    // The editor sends a hash (large files exceed the plugin channel's 1 MiB limit); older versions send the full text.
     const h = input.hash ?? sha(input.text ?? '')
-    // Editor gui so byte UTF-8 (ban LF va ban CRLF): chi bam nhung file tren dia co dung kich thuoc do.
+    // The editor sends the UTF-8 byte size (LF and CRLF variants): only hash files on disk with exactly that size.
     const sizes = [input.size, input.sizeCrlf].filter((s): s is number => typeof s === 'number').flatMap((s) => [s, s + 3]) // +3: BOM UTF-8
     const sizeSet = new Set(sizes)
     const ok = (p: string) => langOfPath(p) === lang && fileHash(p) === h
     const find = (r: string): string[] => {
       const cached = hashIndex.get(r)
       if (!cached || Date.now() - cached.at >= 300000) {
-        // Chua co chi muc: quet va dung ngay khi gap file trung (khong phai doi quet het thu muc lon).
+        // No index yet: scan and stop at the first match (no need to wait for a full scan of a large folder).
         const hit = scan(r, (full, size) => (sizeSet.size ? sizeSet.has(size) : true) && ok(full))
         if (hit) return [hit]
       }
@@ -345,7 +354,7 @@ export function createCore(host: CoreEnv): Core {
       hits = find(r)
       if (hits.length) { wsRoot = r; break }
     }
-    // Khong thay trong bang cu (file moi tao/sua): quet lai tat ca, bo cache.
+    // Not in the old index (file just created/edited): drop the cache and rescan everything.
     if (!wsRoot) {
       for (const r of roots) {
         if (Date.now() > deadline) break
@@ -357,9 +366,9 @@ export function createCore(host: CoreEnv): Core {
     if (!wsRoot) {
       const scanned = roots.map((r) => `${r} (${[...(hashIndex.get(r)?.byHash.values() ?? [])].reduce((n, l) => n + l.length, 0)} file)`)
       host.log(`attach miss: lang=${lang} size=${input.size} roots=${scanned.join(' | ')}`)
-      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: `Không tìm thấy file này (${roots.length} workspace đã quét).` }
+      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: `File not found (${roots.length} workspaces scanned).` }
     }
-    // Workspace long nhau: dung workspace Orca dai nhat chua file, roi goc du an theo ngon ngu.
+    // Nested workspaces: use the longest Orca workspace containing the file, then the language's project root.
     let ws = wsRoot
     for (const w of listed.roots) if (norm(hits[0]).startsWith(norm(resolve(w)) + sep) && resolve(w).length > ws.length) ws = resolve(w)
     const root = projectRootFor(lang, hits[0], ws)
@@ -372,7 +381,7 @@ export function createCore(host: CoreEnv): Core {
     }
   })
 
-  // Ban sao noi dung tung file dang mo trong worker: editor chi gui phan thay doi (kenh plugin gioi han ~1 MiB/tin).
+  // Worker-side copy of each open file: the editor sends only changes (the plugin channel is limited to ~1 MiB per message).
   const docs = new Map<string, string>()
   const sendFull = (srv: Server, path: string, text: string, version: number) => {
     if (srv.open.has(norm(path))) srv.client.notify('textDocument/didChange', { textDocument: { uri: uriOf(path), version }, contentChanges: [{ text }] })
@@ -380,33 +389,33 @@ export function createCore(host: CoreEnv): Core {
     srv.open.set(norm(path), version)
     docs.set(norm(path), text)
   }
-  /** lsp.open: `text` (file nho) hoac khong co text -> doc tu dia (file lon, noi dung editor = dia luc mo). */
+  /** lsp.open: `text` (small file), or no text -> read from disk (large file; editor content equals disk when opened). */
   handle('lsp.open', async ({ path, text, version }: DocInput) => {
     const srv = await serverForPath(path)
     sendFull(srv, path, text ?? readFileSync(path, 'utf8'), version)
     return { ok: true }
   })
-  /** lsp.change: `edits` (offset trong noi dung cu, UTF-16) ap len ban sao; `text` = ca noi dung (ban cu / file nho). */
+  /** lsp.change: `edits` (offsets into the old content, UTF-16) applied to the copy; `text` = full content (older versions / small files). */
   handle('lsp.change', async ({ path, text, version, edits, expectLength }: DocInput) => {
     const srv = await serverForPath(path)
     let next = text
     if (next === undefined && edits) {
       const base = docs.get(norm(path))
-      // Chua co ban sao (worker vua khoi dong lai): khong doan noi dung, bao editor gui lai ca file
+      // No copy yet (worker just restarted): don't guess the content, ask the editor to resend the whole file
       if (base === undefined) return { ok: false, resync: true }
       let cur = base
-      // Monaco: cac change trong mot su kien tinh offset tren noi dung truoc su kien; ap tu cuoi len dau
+      // Monaco: changes in one event use offsets into the content before the event; apply from last to first
       for (const e of [...edits].sort((a, b) => b.offset - a.offset)) cur = cur.slice(0, e.offset) + e.text + cur.slice(e.offset + e.length)
       next = cur
     }
     if (next === undefined) return { ok: false, resync: true }
-    // Lech do dai = ban sao worker sai -> editor gui lai ca file (theo tung doan)
+    // Length mismatch = worker copy is wrong -> the editor resends the whole file (in chunks)
     if (edits && typeof expectLength === 'number' && next.length !== expectLength) return { ok: false, resync: true }
     sendFull(srv, path, next, version)
     return { ok: true }
   })
 
-  /** Gui ca noi dung theo tung doan (file lon): begin -> part... -> commit. Moi doan < 512 KB. */
+  /** Send the full content in chunks (large files): begin -> part... -> commit. Each chunk < 512 KB. */
   const uploads = new Map<string, string[]>()
   handle('lsp.upload', async ({ path, version, part, index, total }: { path: string; version: number; part: string; index: number; total: number }) => {
     const k = norm(path)
@@ -449,10 +458,12 @@ export function createCore(host: CoreEnv): Core {
     return JSON.parse(JSON.stringify({ markdown: md ?? null, range: r.range ?? null }))
   })
 
+  /** Files the language server pointed at (go to definition): the only ones lsp.peek may read. */
+  const peekable = new Set<string>()
   handle('lsp.definition', async ({ path, position }: PosInput): Promise<DefinitionOutput> => {
     const srv = await serverForPath(path)
     let r: any = await srv.client.request('textDocument/definition', { textDocument: { uri: uriOf(path) }, position })
-    // clangd: tren khai bao (header) definition tro ve chinh no -> thu declaration de nhay qua lai .h/.cpp
+    // clangd: on a declaration (header) definition points to itself -> try declaration to jump between .h/.cpp
     if ((!r || (Array.isArray(r) && !r.length)) && srv.lang === 'cpp') r = await srv.client.request('textDocument/declaration', { textDocument: { uri: uriOf(path) }, position }).catch(() => null)
     const list = r ? (Array.isArray(r) ? r : [r]) : []
     const wsRoots = [...(await host.roots().catch(() => ({ roots: [] as string[] }))).roots, srv.root].map((x) => resolve(x))
@@ -461,6 +472,7 @@ export function createCore(host: CoreEnv): Core {
       const u = l.uri ?? l.targetUri
       let p: string
       try { p = fileURLToPath(u) } catch { continue }
+      peekable.add(norm(p))
       locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r) => norm(p).startsWith(norm(r) + sep)) })
     }
     return JSON.parse(JSON.stringify({ locations }))
@@ -497,7 +509,7 @@ export function createCore(host: CoreEnv): Core {
     return { lang: srv.lang, server: SERVER_LABEL[srv.lang], root: srv.root, detail: srv.detail }
   })
 
-  /** Khoi dong lai server cua file (vd sau khi CMake configure tao compile_commands.json / build dir). */
+  /** Restart the file's server (e.g. after CMake configure created compile_commands.json / a build dir). */
   handle('lsp.restart', async ({ path }: { path: string }) => {
     const lang = langOfPath(path)
     const srv = lang ? serverOf(lang, path) : null
@@ -531,16 +543,17 @@ export function createCore(host: CoreEnv): Core {
     if (!srv.legend) return { legend: null, data: [] }
     const r: any = await srv.client.request('textDocument/semanticTokens/full', { textDocument: { uri: uriOf(path) } }, 20000).catch(() => null)
     const data: number[] = Array.isArray(r?.data) ? r.data : []
-    // Gioi han tin ~1 MiB: ~30k token (150k so, moi so <= 7 ky tu JSON) la du cho file nguon thuong; file sinh tu dong (resources_rc.py) bo qua phan sau.
+    // ~1 MiB message limit: ~30k tokens (150k numbers, each <= 7 JSON chars) is enough for normal sources; generated files (resources_rc.py) lose the tail.
     return { legend: srv.legend, data: data.length > 150_000 ? data.slice(0, 150_000) : data }
   })
 
-  /** Noi dung file dich (chi doc) cho peek / dieu huong. Chi file nguon/stub/header. */
+  /** Read-only content of a target file for peek / navigation. Source/stub/header files only. */
   handle('lsp.peek', async ({ path, line }: { path: string; line?: number }) => {
-    if (!langOfPath(path) && !/(^|[\\/])[A-Z][A-Za-z0-9]*$/.test(path)) return { text: '', lang: null }
+    // Only files the language server itself pointed at (go to definition), never an arbitrary path
+    if (!peekable.has(norm(path))) return { text: '', lang: null }
     const lang = langOfPath(path) ?? 'cpp'
-    // Tin < 1 MiB: file nho gui ca; file lon (vd. PySide6/QtCore.pyi 570 KB) gui mot cua so dong quanh `line`,
-    // cac dong ngoai cua so de trong (giu dung so dong de peek nhay dung cho).
+    // Messages < 1 MiB: small files are sent whole; large ones (e.g. PySide6/QtCore.pyi, 570 KB) send a window of lines
+    // around `line`, with lines outside it left empty (line numbers stay correct so peek jumps to the right place).
     const LIMIT = 300_000
     let text: string
     try { text = readFileSync(path, 'utf8') } catch { return { text: '', lang } }
@@ -555,7 +568,7 @@ export function createCore(host: CoreEnv): Core {
     return { text: lines.map((l, i) => (i >= from && i <= to ? l : '')).join('\n'), lang, window: [from, to] }
   })
 
-  /** Mo dinh nghia trong tab Orca (file trong workspace); ngoai workspace thi editor hien peek. */
+  /** Open the definition in an Orca tab (file inside a workspace); outside a workspace the editor shows a peek. */
   handle('lsp.reveal', async ({ path, line }: { path: string; line: number }) => host.reveal ? host.reveal(path, line) : { opened: false, reason: 'no-host' })
 
   return { handlers, workspaceRemoved, shutdown: () => { for (const s of [...servers.values()]) stopServer(s) } }

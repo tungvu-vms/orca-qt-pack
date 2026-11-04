@@ -1,12 +1,12 @@
-// To mau giong VS Code cho Python, QML va C/C++: grammar TextMate (MagicPython, QML, C++ cua VS Code)
-// + theme Dark+/Light+, chay bang vscode-textmate. Grammar nap luoi (dynamic import) nen file Python
-// khong phai tai grammar C++ (~500 KB).
-// Monaco nhan token dang chuoi scope; theme Monaco co mot rule cho moi selector cua theme VS Code,
-// va token tra ve chi la scope cu the nhat khop voi theme (giong cach VS Code chon mau).
+// VS Code-like highlighting for Python, QML and C/C++: TextMate grammars (MagicPython, QML, VS Code's C++)
+// + Dark+/Light+ themes, run with vscode-textmate. Grammars load lazily (dynamic import) so a Python file
+// does not have to load the C++ grammar (~500 KB).
+// Monaco receives tokens as scope strings; the Monaco theme has one rule per VS Code theme selector,
+// and the returned token is just the most specific scope matching the theme (like VS Code picks colors).
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js'
 import { INITIAL, Registry, parseRawGrammar, type IGrammar, type StateStack } from 'vscode-textmate'
 import { createOnigScanner, createOnigString, loadWASM } from 'vscode-oniguruma'
-// WASM nhung base64 vao JS: frame cua plugin tra ve rong khi fetch file .wasm
+// WASM embedded as base64 in the JS: the plugin frame returns empty when fetching a .wasm file
 import onigWasmBase64 from 'vscode-oniguruma/release/onig.wasm'
 import vsThemes from '../vendor/themes.json'
 
@@ -31,7 +31,7 @@ const LANGS: Record<Lang, { scope: string; config: Loader }> = {
 type TokenColor = { scope?: string | string[]; settings: { foreground?: string; fontStyle?: string } }
 type VsTheme = { colors: Record<string, string>; tokenColors: TokenColor[] }
 
-/** Selector don gian (khong co khoang trang) cua theme -> rule; selector long nhau (a b) bo qua. */
+/** Simple theme selectors (no spaces) -> rule; nested selectors (a b) are ignored. */
 function themeSelectors(theme: VsTheme): Map<string, { foreground?: string; fontStyle?: string }> {
   const map = new Map<string, { foreground?: string; fontStyle?: string }>()
   for (const rule of theme.tokenColors) {
@@ -46,7 +46,7 @@ function themeSelectors(theme: VsTheme): Map<string, { foreground?: string; font
   return map
 }
 
-/** Selector dai nhat (cu the nhat) khop voi scope, theo quy tac tien to cham cua TextMate. */
+/** Longest (most specific) selector matching the scope, using TextMate's dotted-prefix rule. */
 function bestSelector(scope: string, selectors: Iterable<string>): string | null {
   let best: string | null = null
   for (const sel of selectors) {
@@ -77,7 +77,7 @@ function getRegistry(): Promise<Registry> {
   return onigReady.then(() => {
     registry ??= new Registry({
       onigLib: Promise.resolve({ createOnigScanner, createOnigString }),
-      // Grammar khong co (asm, glsl, x86...) tra null: vscode-textmate bo qua phan nhung do.
+      // Missing grammars (asm, glsl, x86...) return null: vscode-textmate skips those embedded parts.
       loadGrammar: async (scope) => {
         const load = GRAMMARS[scope]
         if (!load) return null
@@ -88,7 +88,7 @@ function getRegistry(): Promise<Registry> {
   })
 }
 
-/** Dang ky grammar + language configuration cho `lang`. Tra ve false neu khong nap duoc (giu tokenizer co san). */
+/** Register grammar + language configuration for `lang`. Returns false if loading fails (the built-in tokenizer stays). */
 export async function installTextMate(lang: Lang): Promise<boolean> {
   if (!monaco.languages.getLanguages().some((l) => l.id === lang)) monaco.languages.register({ id: lang })
   let grammar: IGrammar | null
@@ -124,7 +124,7 @@ export async function installTextMate(lang: Lang): Promise<boolean> {
   return true
 }
 
-/** Rule Monaco cho theme dang dung: moi selector cua theme VS Code -> mot rule cung ten. */
+/** Monaco rules for the current theme: each VS Code theme selector -> one rule with the same name. */
 export function textMateRules(mode: 'dark' | 'light'): monaco.editor.ITokenThemeRule[] {
   const rules: monaco.editor.ITokenThemeRule[] = []
   for (const [token, s] of selectorsByMode[mode]) {
@@ -133,14 +133,14 @@ export function textMateRules(mode: 'dark' | 'light'): monaco.editor.ITokenTheme
     if (s.fontStyle !== undefined) rule.fontStyle = s.fontStyle
     rules.push(rule)
   }
-  // Selector chi co trong theme kia: dat lai mau chu mac dinh de khong giu mau cua theme cu.
+  // Selectors only in the other theme: reset to the default text color so the old theme's color doesn't stick.
   for (const token of allSelectors) if (!selectorsByMode[mode].has(token)) rules.push({ token, foreground: mode === 'dark' ? 'D4D4D4' : '000000' })
   return rules
 }
 
-/** Semantic token -> scope TextMate, theo bang mac dinh cua VS Code (semanticTokenScopes),
- *  them cac loai rieng cua clangd va qmlls. Key: "type" hoac "type.modifier" (modifier cu the hon thang).
- *  Mang rong = de nguyen mau TextMate. */
+/** Semantic token -> TextMate scope, following VS Code's default table (semanticTokenScopes),
+ *  plus clangd- and qmlls-specific types. Key: "type" or "type.modifier" (the more specific modifier wins).
+ *  Empty array = keep the TextMate color. */
 const SEMANTIC_SCOPES: Record<string, string[]> = {
   namespace: ['entity.name.namespace'],
   type: ['entity.name.type', 'support.type'],
@@ -168,7 +168,7 @@ const SEMANTIC_SCOPES: Record<string, string[]> = {
   label: ['entity.name.label'],
   modifier: ['storage.modifier'],
   keyword: ['keyword'],
-  // clangd: 'comment' = vung #if bi tat; qmlls: comment that
+  // clangd: 'comment' = inactive #if region; qmlls: a real comment
   comment: ['comment'],
   string: ['string'],
   number: ['constant.numeric'],
@@ -191,7 +191,7 @@ const SEMANTIC_SCOPES: Record<string, string[]> = {
   jsGlobalVar: ['support.variable']
 }
 
-/** Token Monaco (selector cua theme) cho mot semantic token; '' neu de nguyen mau TextMate. */
+/** Monaco token (theme selector) for a semantic token; '' to keep the TextMate color. */
 export function semanticToken(type: string, modifiers: string[]): string {
   const keys = [...modifiers.map((m) => `${type}.${m}`), type]
   for (const k of keys) {

@@ -5,9 +5,10 @@ lsp-build/dist-test/
 lsp-build/meta.json
 lsp-build/node_modules/
 node_modules/
-package-lock.json
+/package-lock.json
 samples/**/*_rc.py
 samples/**/.venv/
 samples/**/ui_*.py
 samples/interp-cases/
 samples/qt-quick-app/build/
+lsp-build/dev/remote-test.mjs
