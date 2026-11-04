@@ -4,7 +4,8 @@ export interface Range { start: Pos; end: Pos }
 export interface Loc { path: string; range: Range; inWorkspace: boolean }
 
 export type Lang = 'python' | 'qml' | 'cpp'
-export interface AttachInput { language: Lang; text: string }
+/** `hash` = sha1 noi dung (CRLF -> LF), de khong vuot gioi han tin ~1 MiB voi file lon. `text` chi cho ban cu. */
+export interface AttachInput { language: Lang; hash?: string; text?: string; size?: number; sizeCrlf?: number }
 export interface AttachOutput {
   ok: boolean
   /** Duong dan tuyet doi file da do ra; null neu khong tim thay */
@@ -16,7 +17,10 @@ export interface AttachOutput {
   message?: string
 }
 
-export interface DocInput { path: string; text: string; version: number }
+/** Sua doi: offset/length tinh tren noi dung TRUOC khi sua (don vi UTF-16), nhu Monaco IModelContentChange. */
+export interface TextEdit { offset: number; length: number; text: string }
+/** open: `text` (file nho) hoac bo trong de worker doc tu dia. change: `edits` (+ `expectLength`) hoac `text`. */
+export interface DocInput { path: string; version: number; text?: string; edits?: TextEdit[]; expectLength?: number }
 export interface PosInput { path: string; position: Pos }
 
 export interface HoverOutput { markdown: string | null; range: Range | null }

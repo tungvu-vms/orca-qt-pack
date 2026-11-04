@@ -523,8 +523,13 @@ function activate(orca) {
           if (!SKIP2.has(n) && !n.startsWith(".") && !/^(build|out|cmake-build-)/i.test(n)) walk(full, depth + 1);
           continue;
         }
-        if (!langOfPath(n) || st.size > 2e6) continue;
+        if (!langOfPath(n)) continue;
         count++;
+        if (st.size > 2e6) {
+          const k = `size:${st.size}`;
+          byHash.set(k, [...byHash.get(k) ?? [], full]);
+          continue;
+        }
         try {
           const h = sha(readFileSync2(full, "utf8"));
           const list = byHash.get(h) ?? [];
@@ -636,7 +641,7 @@ function activate(orca) {
         items: p.diagnostics.map((d) => ({ range: d.range, severity: d.severity ?? 1, message: d.message, source: d.source ?? SERVER_LABEL[lang], code: typeof d.code === "object" ? d.code?.value : d.code }))
       };
       srv.diagnostics.set(norm(path), out);
-      orca.panels.post("lsp.diagnostics", { path, ...out });
+      orca.panels.post("lsp.diagnostics", { path, version: out.version, items: out.items.slice(0, 300).map((d) => ({ ...d, message: String(d.message).slice(0, 500) })) });
     });
     const rootUri = pathToFileURL(root).href;
     srv.ready = client.request("initialize", {
@@ -716,13 +721,28 @@ function activate(orca) {
     const { workspaces } = await orca.host.call("workspace.list", {});
     const known = [...servers.values()].map((s) => s.root);
     const roots = [...known, focused, ...workspaces.filter(isLocal).map((w) => resolve3(w.path))].filter((r, i, a) => !!r && a.findIndex((x) => x && norm(x) === norm(r)) === i);
-    const h = sha(input.text);
+    const h = input.hash ?? sha(input.text ?? "");
+    const bigHits = (byHash) => {
+      const sizes = [input.size, input.sizeCrlf].filter((s) => typeof s === "number" && s > 2e6);
+      const out = [];
+      for (const s of sizes) for (const p of byHash.get(`size:${s}`) ?? []) {
+        try {
+          if (sha(readFileSync2(p, "utf8")) === h) out.push(p);
+        } catch {
+        }
+      }
+      return out;
+    };
+    const find = (r) => {
+      const idx = indexFor(r);
+      return [...idx.get(h) ?? [], ...bigHits(idx)].filter((p) => langOfPath(p) === lang);
+    };
     let wsRoot = null;
     let hits = [];
     const deadline = Date.now() + 6e4;
     for (const r of roots) {
       if (Date.now() > deadline) break;
-      hits = (indexFor(r).get(h) ?? []).filter((p) => langOfPath(p) === lang);
+      hits = find(r);
       if (hits.length) {
         wsRoot = r;
         break;
@@ -732,7 +752,7 @@ function activate(orca) {
       for (const r of roots) {
         if (Date.now() > deadline) break;
         hashIndex.delete(r);
-        hits = (indexFor(r).get(h) ?? []).filter((p) => langOfPath(p) === lang);
+        hits = find(r);
         if (hits.length) {
           wsRoot = r;
           break;
@@ -751,17 +771,43 @@ function activate(orca) {
       return { ok: false, path: hits[0], candidates: hits.length, workspace: root, server: null, message: e instanceof Error ? e.message : String(e) };
     }
   });
-  const sync = (srv, path, text, version) => {
+  const docs = /* @__PURE__ */ new Map();
+  const sendFull = (srv, path, text, version) => {
     if (srv.open.has(norm(path))) srv.client.notify("textDocument/didChange", { textDocument: { uri: uriOf(path), version }, contentChanges: [{ text }] });
     else srv.client.notify("textDocument/didOpen", { textDocument: { uri: uriOf(path), languageId: LANGUAGE_ID[srv.lang](path), version, text } });
     srv.open.set(norm(path), version);
+    docs.set(norm(path), text);
   };
   orca.panels.handle("lsp.open", async ({ path, text, version }) => {
-    sync(await serverForPath(path), path, text, version);
+    const srv = await serverForPath(path);
+    sendFull(srv, path, text ?? readFileSync2(path, "utf8"), version);
     return { ok: true };
   });
-  orca.panels.handle("lsp.change", async ({ path, text, version }) => {
-    sync(await serverForPath(path), path, text, version);
+  orca.panels.handle("lsp.change", async ({ path, text, version, edits, expectLength }) => {
+    const srv = await serverForPath(path);
+    let next = text;
+    if (next === void 0 && edits) {
+      const base = docs.get(norm(path));
+      if (base === void 0) return { ok: false, resync: true };
+      let cur = base;
+      for (const e of [...edits].sort((a, b) => b.offset - a.offset)) cur = cur.slice(0, e.offset) + e.text + cur.slice(e.offset + e.length);
+      next = cur;
+    }
+    if (next === void 0) return { ok: false, resync: true };
+    if (edits && typeof expectLength === "number" && next.length !== expectLength) return { ok: false, resync: true };
+    sendFull(srv, path, next, version);
+    return { ok: true };
+  });
+  const uploads = /* @__PURE__ */ new Map();
+  orca.panels.handle("lsp.upload", async ({ path, version, part, index, total }) => {
+    const k = norm(path);
+    if (index === 0) uploads.set(k, []);
+    const parts = uploads.get(k);
+    if (!parts) return { ok: false };
+    parts[index] = part;
+    if (index < total - 1) return { ok: true, pending: true };
+    uploads.delete(k);
+    sendFull(await serverForPath(path), path, parts.join(""), version);
     return { ok: true };
   });
   orca.panels.handle("lsp.close", async ({ path }) => {
@@ -821,7 +867,7 @@ function activate(orca) {
       const doc = typeof it.documentation === "string" ? it.documentation : it.documentation?.value;
       const out = { label: String(it.label).trim(), kind: it.kind ?? 1 };
       if (it.detail) out.detail = String(it.detail);
-      if (doc) out.documentation = String(doc).slice(0, 4e3);
+      if (doc) out.documentation = String(doc).slice(0, 1500);
       const insert = it.textEdit?.newText ?? it.insertText;
       if (insert) out.insertText = String(insert);
       if (it.textEdit?.range ?? it.textEdit?.replace) out.range = it.textEdit.range ?? it.textEdit.replace;
@@ -834,7 +880,8 @@ function activate(orca) {
   orca.panels.handle("lsp.diagnostics", async ({ path }) => {
     const lang = langOfPath(path);
     const srv = lang ? serverOf(lang, path) : null;
-    return srv?.diagnostics.get(norm(path)) ?? { version: -1, items: [] };
+    const d = srv?.diagnostics.get(norm(path));
+    return d ? { version: d.version, items: d.items.slice(0, 2e3).map((x) => ({ ...x, message: String(x.message).slice(0, 500) })) } : { version: -1, items: [] };
   });
   orca.panels.handle("lsp.serverInfo", async ({ path }) => {
     const srv = await serverForPath(path);
@@ -869,13 +916,14 @@ function activate(orca) {
     const srv = await serverForPath(path);
     if (!srv.legend) return { legend: null, data: [] };
     const r = await srv.client.request("textDocument/semanticTokens/full", { textDocument: { uri: uriOf(path) } }, 2e4).catch(() => null);
-    return { legend: srv.legend, data: Array.isArray(r?.data) ? r.data : [] };
+    const data = Array.isArray(r?.data) ? r.data : [];
+    return { legend: srv.legend, data: data.length > 15e4 ? data.slice(0, 15e4) : data };
   });
   orca.panels.handle("lsp.peek", async ({ path }) => {
     if (!langOfPath(path) && !/(^|[\\/])[A-Z][A-Za-z0-9]*$/.test(path)) return { text: "", lang: null };
     const lang = langOfPath(path) ?? "cpp";
     try {
-      return { text: readFileSync2(path, "utf8").slice(0, 6e5), lang };
+      return { text: readFileSync2(path, "utf8").slice(0, 3e5), lang };
     } catch {
       return { text: "", lang };
     }

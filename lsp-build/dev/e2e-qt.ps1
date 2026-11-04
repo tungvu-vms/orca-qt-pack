@@ -17,7 +17,7 @@ $cases = @(
 foreach ($c in $cases) {
   $p = Join-Path $root $c.file
   $text = [IO.File]::ReadAllText($p)
-  $a = Req 'lsp.attach' @{ language = $c.lang; text = $text }
+  $a = Req 'lsp.attach' @{ language = $c.lang; hash = (-join ([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($text.Replace("`r`n","`n"))) | % { $_.ToString('x2') })) }
   "== $($c.file) [$($c.lang)] attach ok=$($a.ok) server=$($a.server) root=$($a.workspace) $($a.message)" | Add-Content $out
   if (-not $a.ok) { continue }
   Req 'lsp.open' @{ path = $p; text = $text; version = 1 } | Out-Null

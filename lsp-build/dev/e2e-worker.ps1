@@ -10,7 +10,7 @@ function Req($name, $obj) {
   if ($r.ok) { return $r.result.result } else { "ERR $name : $($r.error.message)" | Add-Content $out; return $null }
 }
 $text = [IO.File]::ReadAllText($path)
-Req 'lsp.attach' @{ language = 'python'; text = $text } | Out-Null
+Req 'lsp.attach' @{ language = 'python'; hash = (-join ([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($text.Replace("`r`n","`n"))) | % { $_.ToString('x2') })) } | Out-Null
 Req 'lsp.open' @{ path = $path; text = $text; version = 1 } | Out-Null
 Start-Sleep 3
 $lines = $text -split "`n"

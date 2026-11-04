@@ -74,8 +74,11 @@ export default function activate(orca: OrcaWorkerApi): void {
         let st
         try { st = statSync(full) } catch { continue }
         if (st.isDirectory()) { if (!SKIP.has(n) && !n.startsWith('.') && !/^(build|out|cmake-build-)/i.test(n)) walk(full, depth + 1); continue }
-        if (!langOfPath(n) || st.size > 2_000_000) continue
+        if (!langOfPath(n)) continue
         count++
+        // File lon (vd. resources_rc.py 19 MB do pyside6-rcc sinh): khong bam ca file khi quet (cham, ton RAM);
+        // ghi theo kich thuoc, khi attach moi bam nhung file cung kich thuoc.
+        if (st.size > 2_000_000) { const k = `size:${st.size}`; byHash.set(k, [...(byHash.get(k) ?? []), full]); continue }
         try {
           const h = sha(readFileSync(full, 'utf8'))
           const list = byHash.get(h) ?? []
@@ -183,7 +186,8 @@ export default function activate(orca: OrcaWorkerApi): void {
         items: p.diagnostics.map((d) => ({ range: d.range, severity: d.severity ?? 1, message: d.message, source: d.source ?? SERVER_LABEL[lang], code: typeof d.code === 'object' ? d.code?.value : d.code }))
       }
       srv.diagnostics.set(norm(path), out)
-      orca.panels.post('lsp.diagnostics', { path, ...out })
+      // Tin post gioi han 256 KiB: chi day toi da 300 loi, cat moi thong bao 500 ky tu
+      orca.panels.post('lsp.diagnostics', { path, version: out.version, items: out.items.slice(0, 300).map((d) => ({ ...d, message: String(d.message).slice(0, 500) })) })
     })
     const rootUri = pathToFileURL(root).href
     srv.ready = client.request('initialize', {
@@ -267,13 +271,25 @@ export default function activate(orca: OrcaWorkerApi): void {
     const known = [...servers.values()].map((s) => s.root)
     const roots = [...known, focused, ...workspaces.filter(isLocal).map((w) => resolve(w.path))]
       .filter((r, i, a): r is string => !!r && a.findIndex((x) => x && norm(x) === norm(r)) === i)
-    const h = sha(input.text)
+    // Editor gui ma bam (file lon vuot gioi han 1 MiB cua kenh plugin); ban cu gui ca text.
+    const h = input.hash ?? sha(input.text ?? '')
+    // File lon: editor gui them so byte UTF-8 (LF) va CRLF; so voi file cung kich thuoc tren dia roi moi bam.
+    const bigHits = (byHash: Map<string, string[]>): string[] => {
+      const sizes = [input.size, input.sizeCrlf].filter((s): s is number => typeof s === 'number' && s > 2_000_000)
+      const out: string[] = []
+      for (const s of sizes) for (const p of byHash.get(`size:${s}`) ?? []) { try { if (sha(readFileSync(p, 'utf8')) === h) out.push(p) } catch { /* */ } }
+      return out
+    }
+    const find = (r: string) => {
+      const idx = indexFor(r)
+      return [...(idx.get(h) ?? []), ...bigHits(idx)].filter((p) => langOfPath(p) === lang)
+    }
     let wsRoot: string | null = null
     let hits: string[] = []
     const deadline = Date.now() + 60000
     for (const r of roots) {
       if (Date.now() > deadline) break
-      hits = (indexFor(r).get(h) ?? []).filter((p) => langOfPath(p) === lang)
+      hits = find(r)
       if (hits.length) { wsRoot = r; break }
     }
     // Khong thay trong bang cu (file moi tao/sua): quet lai tat ca, bo cache.
@@ -281,7 +297,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       for (const r of roots) {
         if (Date.now() > deadline) break
         hashIndex.delete(r)
-        hits = (indexFor(r).get(h) ?? []).filter((p) => langOfPath(p) === lang)
+        hits = find(r)
         if (hits.length) { wsRoot = r; break }
       }
     }
@@ -299,13 +315,53 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
   })
 
-  const sync = (srv: Server, path: string, text: string, version: number) => {
+  // Ban sao noi dung tung file dang mo trong worker: editor chi gui phan thay doi (kenh plugin gioi han ~1 MiB/tin).
+  const docs = new Map<string, string>()
+  const sendFull = (srv: Server, path: string, text: string, version: number) => {
     if (srv.open.has(norm(path))) srv.client.notify('textDocument/didChange', { textDocument: { uri: uriOf(path), version }, contentChanges: [{ text }] })
     else srv.client.notify('textDocument/didOpen', { textDocument: { uri: uriOf(path), languageId: LANGUAGE_ID[srv.lang](path), version, text } })
     srv.open.set(norm(path), version)
+    docs.set(norm(path), text)
   }
-  orca.panels.handle('lsp.open', async ({ path, text, version }: DocInput) => { sync(await serverForPath(path), path, text, version); return { ok: true } })
-  orca.panels.handle('lsp.change', async ({ path, text, version }: DocInput) => { sync(await serverForPath(path), path, text, version); return { ok: true } })
+  /** lsp.open: `text` (file nho) hoac khong co text -> doc tu dia (file lon, noi dung editor = dia luc mo). */
+  orca.panels.handle('lsp.open', async ({ path, text, version }: DocInput) => {
+    const srv = await serverForPath(path)
+    sendFull(srv, path, text ?? readFileSync(path, 'utf8'), version)
+    return { ok: true }
+  })
+  /** lsp.change: `edits` (offset trong noi dung cu, UTF-16) ap len ban sao; `text` = ca noi dung (ban cu / file nho). */
+  orca.panels.handle('lsp.change', async ({ path, text, version, edits, expectLength }: DocInput) => {
+    const srv = await serverForPath(path)
+    let next = text
+    if (next === undefined && edits) {
+      const base = docs.get(norm(path))
+      // Chua co ban sao (worker vua khoi dong lai): khong doan noi dung, bao editor gui lai ca file
+      if (base === undefined) return { ok: false, resync: true }
+      let cur = base
+      // Monaco: cac change trong mot su kien tinh offset tren noi dung truoc su kien; ap tu cuoi len dau
+      for (const e of [...edits].sort((a, b) => b.offset - a.offset)) cur = cur.slice(0, e.offset) + e.text + cur.slice(e.offset + e.length)
+      next = cur
+    }
+    if (next === undefined) return { ok: false, resync: true }
+    // Lech do dai = ban sao worker sai -> editor gui lai ca file (theo tung doan)
+    if (edits && typeof expectLength === 'number' && next.length !== expectLength) return { ok: false, resync: true }
+    sendFull(srv, path, next, version)
+    return { ok: true }
+  })
+
+  /** Gui ca noi dung theo tung doan (file lon): begin -> part... -> commit. Moi doan < 512 KB. */
+  const uploads = new Map<string, string[]>()
+  orca.panels.handle('lsp.upload', async ({ path, version, part, index, total }: { path: string; version: number; part: string; index: number; total: number }) => {
+    const k = norm(path)
+    if (index === 0) uploads.set(k, [])
+    const parts = uploads.get(k)
+    if (!parts) return { ok: false }
+    parts[index] = part
+    if (index < total - 1) return { ok: true, pending: true }
+    uploads.delete(k)
+    sendFull(await serverForPath(path), path, parts.join(''), version)
+    return { ok: true }
+  })
 
   orca.panels.handle('lsp.close', async ({ path }: { path: string }) => {
     const lang = langOfPath(path)
@@ -360,7 +416,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       const doc = typeof it.documentation === 'string' ? it.documentation : it.documentation?.value
       const out: Record<string, unknown> = { label: String(it.label).trim(), kind: it.kind ?? 1 }
       if (it.detail) out.detail = String(it.detail)
-      if (doc) out.documentation = String(doc).slice(0, 4000)
+      if (doc) out.documentation = String(doc).slice(0, 1500)
       const insert = it.textEdit?.newText ?? it.insertText
       if (insert) out.insertText = String(insert)
       if (it.textEdit?.range ?? it.textEdit?.replace) out.range = it.textEdit.range ?? it.textEdit.replace
@@ -374,7 +430,8 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('lsp.diagnostics', async ({ path }: { path: string }) => {
     const lang = langOfPath(path)
     const srv = lang ? serverOf(lang, path) : null
-    return srv?.diagnostics.get(norm(path)) ?? { version: -1, items: [] }
+    const d = srv?.diagnostics.get(norm(path))
+    return d ? { version: d.version, items: d.items.slice(0, 2000).map((x) => ({ ...x, message: String(x.message).slice(0, 500) })) } : { version: -1, items: [] }
   })
 
   orca.panels.handle('lsp.serverInfo', async ({ path }: { path: string }) => {
@@ -415,14 +472,17 @@ export default function activate(orca: OrcaWorkerApi): void {
     const srv = await serverForPath(path)
     if (!srv.legend) return { legend: null, data: [] }
     const r: any = await srv.client.request('textDocument/semanticTokens/full', { textDocument: { uri: uriOf(path) } }, 20000).catch(() => null)
-    return { legend: srv.legend, data: Array.isArray(r?.data) ? r.data : [] }
+    const data: number[] = Array.isArray(r?.data) ? r.data : []
+    // Gioi han tin ~1 MiB: ~30k token (150k so, moi so <= 7 ky tu JSON) la du cho file nguon thuong; file sinh tu dong (resources_rc.py) bo qua phan sau.
+    return { legend: srv.legend, data: data.length > 150_000 ? data.slice(0, 150_000) : data }
   })
 
   /** Noi dung file dich (chi doc) cho peek / dieu huong. Chi file nguon/stub/header. */
   orca.panels.handle('lsp.peek', async ({ path }: { path: string }) => {
     if (!langOfPath(path) && !/(^|[\\/])[A-Z][A-Za-z0-9]*$/.test(path)) return { text: '', lang: null }
     const lang = langOfPath(path) ?? 'cpp'
-    try { return { text: readFileSync(path, 'utf8').slice(0, 600_000), lang } } catch { return { text: '', lang } }
+    // < 1 MiB sau khi ma hoa JSON (ky tu thuong ~1 byte, tieng Viet/ky tu dac biet co the 2-6): 300k ky tu cho an toan
+    try { return { text: readFileSync(path, 'utf8').slice(0, 300_000), lang } } catch { return { text: '', lang } }
   })
 
   /** Mo dinh nghia trong tab Orca (file trong workspace); ngoai workspace thi editor hien peek. */

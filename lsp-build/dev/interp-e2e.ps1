@@ -9,7 +9,7 @@ function Req($name, $obj, $t = 60000) {
 }
 orca repo add --path <repo>\samples\interp-cases --kind folder --json 2>$null | Out-Null
 $f = '<repo>\samples\interp-cases\c-multi\main.py'
-Req 'lsp.attach' @{ language = 'python'; text = [IO.File]::ReadAllText($f) } 90000 | Out-Null
+Req 'lsp.attach' @{ language = 'python'; hash = (-join ([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($f).Replace("`r`n","`n"))) | % { $_.ToString('x2') })) } 90000 | Out-Null
 $r = Req 'lsp.interpreters' @{ path = $f }
 "c-multi root=$($r.root) current=$($r.current.label) [$($r.current.source)]" | Add-Content $out
 "  list: $(($r.list | % { "$($_.label)[$($_.source)]" }) -join ' | ')" | Add-Content $out
@@ -21,6 +21,6 @@ $h = Req 'lsp.hover' @{ path = $f; position = @{ line = 0; character = 8 } }
 $s = Req 'lsp.setInterpreter' @{ path = $f; interpreter = $null }
 "after reset auto: $($s.current.label) [$($s.current.source)]" | Add-Content $out
 $f2 = '<repo>\samples\demo-app\main.py'
-Req 'lsp.attach' @{ language = 'python'; text = [IO.File]::ReadAllText($f2) } 90000 | Out-Null
+Req 'lsp.attach' @{ language = 'python'; hash = (-join ([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($f2).Replace("`r`n","`n"))) | % { $_.ToString('x2') })) } 90000 | Out-Null
 $r2 = Req 'lsp.interpreters' @{ path = $f2 }
 "demo-app current=$($r2.current.label) [$($r2.current.source)]" | Add-Content $out

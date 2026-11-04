@@ -43,6 +43,12 @@ const req = <T>(name: string, input: unknown, timeoutMs = 20000) => orca.plugin.
 // Hien loi yeu cau len thanh trang thai thay vi nuot im lang
 const reportError = (e: unknown) => { setStatus('Lỗi LSP: ' + (e instanceof Error ? e.message : String(e)).slice(0, 200), 'err'); return null }
 
+/** sha1 cua noi dung (CRLF -> LF), cung cach worker bam file tren dia. */
+async function sha1Lf(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text.replace(/\r\n/g, '\n')))
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 const toPos = (p: monaco.Position): Pos => ({ line: p.lineNumber - 1, character: p.column - 1 })
 const toRange = (r: { start: Pos; end: Pos }) => new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1)
 
@@ -152,7 +158,11 @@ async function main() {
 
   // --- noi voi worker ---
   setStatus('Đang tìm file trong workspace…', 'busy')
-  const att = await req<AttachOutput>('lsp.attach', { language: LANG, text: model.getValue() }, 90000).catch((e) => ({ ok: false, path: null, candidates: 0, workspace: null, server: null, message: String(e) }) as AttachOutput)
+  // Gui ma bam thay cho ca file: kenh plugin gioi han ~1 MiB/tin (file resources_rc.py 19 MB se loi "message too large").
+  const lfText = model.getValue().replace(/\r\n/g, '\n')
+  const lfBytes = new TextEncoder().encode(lfText).length
+  const lineBreaks = (lfText.match(/\n/g) ?? []).length
+  const att = await req<AttachOutput>('lsp.attach', { language: LANG, hash: await sha1Lf(lfText), size: lfBytes, sizeCrlf: lfBytes + lineBreaks }, 90000).catch((e) => ({ ok: false, path: null, candidates: 0, workspace: null, server: null, message: String(e) }) as AttachOutput)
   if (!att.path) { setStatus(att.message ?? 'Không gắn được LSP', 'err'); return }
   const path = att.path
   const rel = att.workspace ? path.slice(att.workspace.length + 1).replace(/\\/g, '/') : path
@@ -160,7 +170,19 @@ async function main() {
   setStatus(`${SERVER} • ${rel}${att.server && att.server.includes('(') ? ' • ' + att.server.slice(att.server.indexOf('(') + 1, -1) : ''}${att.candidates > 1 ? ` • ⚠ ${att.candidates} file trùng nội dung, có thể nhận nhầm` : ''}`, att.candidates > 1 ? 'warn' : 'ok')
 
   let version = 1
-  await req('lsp.open', { path, text: model.getValue(), version })
+  // File nho: gui noi dung; file lon: worker doc tu dia (luc mo, noi dung editor = noi dung tren dia).
+  const SMALL = 400_000
+  const openText = model.getValue()
+  await req('lsp.open', openText.length <= SMALL ? { path, text: openText, version } : { path, version })
+  /** Gui lai ca noi dung theo doan (khi ban sao cua worker lech). */
+  const resyncFull = async () => {
+    const t = model.getValue()
+    const v = ++version
+    if (t.length <= SMALL) { await req('lsp.change', { path, text: t, version: v }); return }
+    const CH = 300_000
+    const total = Math.ceil(t.length / CH)
+    for (let i = 0; i < total; i++) await req('lsp.upload', { path, version: v, part: t.slice(i * CH, (i + 1) * CH), index: i, total }, 60000)
+  }
 
   const semEmitter = new monaco.Emitter<void>()
 
@@ -237,7 +259,7 @@ async function main() {
     setStatus(`Đang khởi động lại ${SERVER}…`, 'busy')
     const r = await req<{ detail: string }>('lsp.restart', { path }, 90000).catch(reportError)
     if (!r) return
-    await req('lsp.open', { path, text: model.getValue(), version: ++version })
+    await resyncFull()
     setStatus(`${SERVER} • ${rel} • ${r.detail}`, 'ok')
     if (LANG !== 'python') { interpBtn.textContent = `⚙ ${SERVER}`; interpBtn.title = `${r.detail}\nBấm để khởi động lại ${SERVER} (sau khi CMake configure)` }
     semEmitter.fire()
@@ -253,13 +275,37 @@ async function main() {
     interpBtn.onclick = () => restartServer()
     void req<{ detail: string }>('lsp.serverInfo', { path }).then((i) => { interpBtn.title = `${i.detail}\nBấm để khởi động lại ${SERVER} (sau khi CMake configure)` }).catch(() => {})
   }
+  // Gom thay doi theo tung su kien Monaco, gui dang edits (khong gui ca file): file lon van duoi gioi han tin.
+  // Moi su kien: offset tinh tren noi dung truoc su kien; gui theo thu tu de worker ap dung lan luot.
+  type Edit = { offset: number; length: number; text: string }
+  let pendingEvents: Edit[][] = []
+  let pendingBytes = 0
+  let sending: Promise<void> = Promise.resolve()
   let changeTimer: ReturnType<typeof setTimeout> | undefined
-  model.onDidChangeContent(() => {
+  model.onDidChangeContent((ev) => {
+    const edits = ev.changes.map((c) => ({ offset: c.rangeOffset, length: c.rangeLength, text: c.text }))
+    pendingEvents.push(edits)
+    pendingBytes += edits.reduce((n, e) => n + e.text.length, 0)
     clearTimeout(changeTimer)
-    changeTimer = setTimeout(() => { void req('lsp.change', { path, text: model.getValue(), version: ++version }) }, 200)
+    changeTimer = setTimeout(() => { void flushChange() }, 200)
   })
+  const sendPending = async () => {
+    const events = pendingEvents
+    const big = pendingBytes > 400_000
+    pendingEvents = []
+    pendingBytes = 0
+    if (!events.length) return
+    // Dan/thay the lon (vd. reload file): gui lai ca file theo doan
+    if (big) { await resyncFull(); return }
+    for (const edits of events) {
+      const r = await req<{ ok: boolean; resync?: boolean }>('lsp.change', { path, edits, version: ++version, expectLength: undefined }).catch(() => ({ ok: false, resync: true }))
+      if (!r.ok) { await resyncFull(); return }
+    }
+  }
   const flushChange = async () => {
-    if (changeTimer) { clearTimeout(changeTimer); changeTimer = undefined; await req('lsp.change', { path, text: model.getValue(), version: ++version }) }
+    if (changeTimer) { clearTimeout(changeTimer); changeTimer = undefined }
+    sending = sending.then(sendPending, sendPending)
+    await sending
   }
   window.addEventListener('beforeunload', () => { void req('lsp.close', { path }) })
 
