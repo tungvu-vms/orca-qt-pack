@@ -1,0 +1,8 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <!-- icons -->
+  <qresource prefix="/icons">
+    <file alias="app.png">images/app.png</file>
+    <file>qml/Main.qml</file>
+  </qresource>
+</RCC>

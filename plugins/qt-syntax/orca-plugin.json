@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 2,
+  "id": "qt-dev-syntax",
+  "name": "Qt Developer Syntax",
+  "version": "0.1.0",
+  "execution": "data",
+  "description": "Highlighting for Qt project files: Qt Style Sheets, resources, Designer forms, Linguist translations, qmake, CMake modules, PySide6 deploy specs and pip requirements.",
+  "license": "LGPL-3.0-only AND MIT",
+  "author": { "name": "GPS Tech Vietnam" },
+  "engines": { "orca": ">=1.4.246" },
+  "contributes": {
+    "syntaxes": [
+      { "id": "qss", "title": "Qt Style Sheet", "scopeName": "source.qss", "path": "syntaxes/qss.tmLanguage.json", "configuration": "syntaxes/qss-configuration.json", "extensions": [".qss"] },
+      { "id": "qrc", "title": "Qt Resource Collection", "scopeName": "source.qrc", "path": "syntaxes/qrc.tmLanguage.json", "configuration": "syntaxes/qrc-configuration.json", "extensions": [".qrc", ".qrc.cmakein"] },
+      { "id": "qt-ui", "title": "Qt Designer Form", "scopeName": "source.ui", "path": "syntaxes/ui.tmLanguage.json", "configuration": "syntaxes/ui-configuration.json", "extensions": [".ui"] },
+      { "id": "qt-ts", "title": "Qt Linguist Translation", "scopeName": "source.qt-ts", "path": "syntaxes/qt-ts.tmLanguage.json", "configuration": "syntaxes/qt-ts-configuration.json" },
+      { "id": "qtd", "title": "Qt Diagnostic Trace", "scopeName": "source.qtd", "path": "syntaxes/qtd.tmLanguage.json", "configuration": "syntaxes/qtd-configuration.json", "extensions": [".qtd"] },
+      { "id": "qdoc", "title": "QDoc", "scopeName": "source.qdoc", "path": "syntaxes/qdoc.tmLanguage.json", "configuration": "syntaxes/qdoc-configuration.json", "extensions": [".qdoc", ".qdocconf", ".qdocinc"] },
+      { "id": "pysidedeploy", "title": "PySide6 Deploy Spec", "scopeName": "source.qt-pysidedeployspec", "path": "syntaxes/pysidedeploy.tmLanguage.json", "configuration": "syntaxes/pysidedeploy-configuration.json", "filenames": ["pysidedeploy.spec"] },
+      { "id": "qmake", "title": "qmake Project", "scopeName": "source.qmake", "path": "syntaxes/qmake.tmLanguage.json", "configuration": "syntaxes/qmake-configuration.json", "extensions": [".pro", ".pri", ".prf", ".prl"], "filenames": [".qmake.conf", ".qmake.stash", "qmake.conf"] },
+      { "id": "cmake-module", "title": "CMake", "scopeName": "source.cmake", "path": "syntaxes/cmake.tmLanguage.json", "configuration": "syntaxes/cmake-configuration.json", "extensions": [".cmake", ".cmake.in"] },
+      { "id": "cmake-cache", "title": "CMake Cache", "scopeName": "source.cmakecache", "path": "syntaxes/cmake-cache.tmLanguage.json", "filenames": ["CMakeCache.txt"] },
+      { "id": "pip-requirements", "title": "pip Requirements", "scopeName": "source.pip-requirements", "path": "syntaxes/pip-requirements.tmLanguage.json", "configuration": "syntaxes/pip-requirements-configuration.json", "filenames": ["requirements.txt", "requirements-dev.txt", "requirements.in", "constraints.txt"] },
+      { "id": "qt-xml-dependency", "title": "XML grammar dependency", "scopeName": "text.xml", "path": "syntaxes/xml.tmLanguage.json" },
+      { "id": "qt-ini-dependency", "title": "INI grammar dependency", "scopeName": "source.ini", "path": "syntaxes/ini.tmLanguage.json" },
+      { "id": "qt-java-dependency", "title": "Java grammar dependency", "scopeName": "source.java", "path": "syntaxes/java.tmLanguage.json" }
+    ]
+  },
+  "capabilities": []
+}

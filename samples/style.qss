@@ -1,0 +1,7 @@
+/* Sample Qt Style Sheet */
+QPushButton#okButton {
+    background-color: #2d7d46;
+    border-radius: 4px;
+}
+QPushButton:hover:!pressed { color: white; }
+QLineEdit[readOnly="true"] { background: palette(window); }

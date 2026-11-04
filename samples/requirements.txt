@@ -1,0 +1,3 @@
+PySide6==6.9.1
+shiboken6>=6.9 # bindings
+-r requirements-dev.txt

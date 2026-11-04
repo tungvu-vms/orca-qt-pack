@@ -1,0 +1,49 @@
+{
+  "manifestVersion": 2,
+  "id": "qt-dev-tools",
+  "name": "Qt Developer Tools",
+  "version": "0.1.0",
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "description": "Qt, QML, PySide6 and PyQt tools in Orca: a panel that finds the project's .ui, .qrc, .qml and .ts files and runs Designer, uic, rcc, qmllint, lupdate/lrelease, CMake and qmake in a workspace terminal, plus qmlformat on save.",
+  "license": "MIT",
+  "author": { "name": "GPS Tech Vietnam" },
+  "engines": { "orca": ">=1.4.248" },
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      { "id": "qt-tools", "title": "Qt Tools", "icon": "wrench", "entry": "src/panel.tsx", "ui": "components" }
+    ],
+    "commands": [
+      { "id": "qt.designer", "title": "Qt: Open Designer", "when": "workspace" },
+      { "id": "qt.cmake.configure", "title": "Qt: CMake configure (build/)", "when": "workspace" },
+      { "id": "qt.cmake.build", "title": "Qt: CMake build", "when": "workspace" },
+      { "id": "qt.qmllint.all", "title": "Qt: Lint all QML files", "when": "workspace" },
+      { "id": "qt.uic.all", "title": "Qt: Compile all .ui files to Python", "when": "workspace" },
+      { "id": "qt.rcc.all", "title": "Qt: Compile all .qrc files to Python", "when": "workspace" },
+      { "id": "qt.lupdate", "title": "Qt: Update translations (lupdate)", "when": "workspace" },
+      { "id": "qt.doctor", "title": "Qt: Check toolchain", "when": "global" }
+    ],
+    "keybindings": [
+      { "command": "qt.cmake.build", "key": "Mod+Shift+B", "when": "workspace" }
+    ],
+    "hooks": [
+      { "event": "editor.save.before", "onError": "pass" }
+    ],
+    "settings": [
+      { "key": "qtBin", "title": "Qt bin folder", "description": "Folder holding designer, uic, rcc, qmllint, qmlformat, lupdate. Empty: search PATH.", "type": "string", "default": "", "placeholder": "C:\\Qt\\6.12.0\\mingw_64\\bin" },
+      { "key": "binding", "title": "Python binding", "description": "Which generator uic/rcc output targets.", "type": "string", "default": "pyside6", "enum": ["pyside6", "pyqt6", "pyqt5", "cpp"], "enumLabels": ["PySide6", "PyQt6", "PyQt5", "C++ (uic/rcc native)"] },
+      { "key": "python", "title": "Python interpreter", "description": "Used for PySide6/PyQt tools. Empty: the workspace .venv if present, otherwise python on PATH.", "type": "string", "default": "" },
+      { "key": "formatQmlOnSave", "title": "Format QML on save", "description": "Run qmlformat when a .qml file is saved.", "type": "boolean", "default": true },
+      { "key": "cmakeGenerator", "title": "CMake generator", "type": "string", "default": "Ninja", "enum": ["Ninja", "MinGW Makefiles", "Visual Studio 17 2022", "Unix Makefiles"] },
+      { "key": "cmakeBuildType", "title": "CMake build type", "type": "string", "default": "Debug", "enum": ["Debug", "Release", "RelWithDebInfo", "MinSizeRel"] }
+    ]
+  },
+  "capabilities": [
+    { "kind": "workspace:read" },
+    { "kind": "workspace:write" },
+    { "kind": "terminal:send" },
+    { "kind": "notifications:show" },
+    { "kind": "settings:own" }
+  ]
+}

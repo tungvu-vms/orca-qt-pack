@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 2,
+  "id": "qt-dev-icons",
+  "name": "Qt Developer Icons",
+  "version": "0.1.0",
+  "execution": "data",
+  "description": "Material file icons plus Qt icons for QML, Designer forms, resources, style sheets, qmldir, QDoc and PySide6 deploy specs, with icons for common Qt project folders.",
+  "license": "MIT AND LGPL-3.0-only",
+  "author": { "name": "GPS Tech Vietnam" },
+  "engines": { "orca": ">=1.4.246" },
+  "contributes": {
+    "iconThemes": [
+      { "id": "qt-dev", "title": "Qt Developer Icons", "path": "icons/theme.json" },
+      { "id": "qt-dev-light", "title": "Qt Developer Icons (Light)", "path": "icons/theme-light.json" }
+    ]
+  },
+  "capabilities": []
+}

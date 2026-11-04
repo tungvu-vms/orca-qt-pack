@@ -1,0 +1,202 @@
+{
+  "name": "qmake Project",
+  "scopeName": "source.qmake",
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#scope-block"
+    },
+    {
+      "include": "#assignment"
+    },
+    {
+      "include": "#function-call"
+    },
+    {
+      "include": "#value"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "match": "(#).*$",
+      "name": "comment.line.number-sign.qmake",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.comment.qmake"
+        }
+      }
+    },
+    "assignment": {
+      "begin": "^\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*(\\+=|-=|\\*=|~=|=)",
+      "beginCaptures": {
+        "1": {
+          "patterns": [
+            {
+              "include": "#builtin-variable"
+            },
+            {
+              "match": ".+",
+              "name": "variable.other.qmake"
+            }
+          ]
+        },
+        "2": {
+          "name": "keyword.operator.assignment.qmake"
+        }
+      },
+      "end": "(?<!\\\\)$",
+      "patterns": [
+        {
+          "include": "#line-continuation"
+        },
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#value"
+        }
+      ]
+    },
+    "builtin-variable": {
+      "match": "\\b(CONFIG|DEFINES|DEF_FILE|DEPENDPATH|DESTDIR|DISTFILES|DLLDESTDIR|FORMS|HEADERS|ICON|IDLSOURCES|INCLUDEPATH|INSTALLS|LEXSOURCES|LIBS|LITERAL_HASH|MAKEFILE|MOC_DIR|OBJECTS_DIR|OTHER_FILES|POST_TARGETDEPS|PRE_TARGETDEPS|PRECOMPILED_HEADER|QMAKE_[A-Z0-9_]+|QML_IMPORT_PATH|QML_DESIGNER_IMPORT_PATH|QT|QTPLUGIN|RCC_DIR|RC_FILE|RC_ICONS|REQUIRES|RESOURCES|SOURCES|SUBDIRS|TARGET|TEMPLATE|TRANSLATIONS|UI_DIR|VERSION|VPATH|YACCSOURCES|PKGCONFIG|LANGUAGE|RES_FILE|TARGET_EXT|VER_MAJ|VER_MIN|VER_PAT)\\b",
+      "name": "support.variable.qmake"
+    },
+    "scope-block": {
+      "match": "^\\s*(!?)([A-Za-z0-9_|!:*+.-]+?)(\\s*\\(([^)]*)\\))?\\s*(\\{|:)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.logical.qmake"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#control-keyword"
+            },
+            {
+              "include": "#platform-scope"
+            },
+            {
+              "match": "[|:]",
+              "name": "keyword.operator.logical.qmake"
+            },
+            {
+              "match": "[A-Za-z0-9_*+.-]+",
+              "name": "entity.name.section.qmake"
+            }
+          ]
+        },
+        "4": {
+          "patterns": [
+            {
+              "include": "#value"
+            }
+          ]
+        },
+        "5": {
+          "name": "punctuation.section.block.begin.qmake"
+        }
+      }
+    },
+    "control-keyword": {
+      "match": "\\b(if|else|for|defineTest|defineReplace|contains|isEmpty|exists|equals|isEqual|greaterThan|lessThan|versionAtLeast|versionAtMost|qtConfig|CONFIG|unset|include|load|error|warning|message|return|break|next|export|cache|requires|debug|release)\\b",
+      "name": "keyword.control.qmake"
+    },
+    "platform-scope": {
+      "match": "\\b(win32|unix|macx|macos|ios|android|linux|linux-g\\+\\+|win32-g\\+\\+|win32-msvc[0-9]*|msvc|mingw|wasm|emscripten|qnx|freebsd|static|shared|debug_and_release)\\b",
+      "name": "constant.language.platform.qmake"
+    },
+    "function-call": {
+      "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
+      "beginCaptures": {
+        "1": {
+          "patterns": [
+            {
+              "include": "#control-keyword"
+            },
+            {
+              "match": ".+",
+              "name": "entity.name.function.qmake"
+            }
+          ]
+        },
+        "2": {
+          "name": "punctuation.definition.arguments.begin.qmake"
+        }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.arguments.end.qmake"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#value"
+        }
+      ]
+    },
+    "line-continuation": {
+      "match": "\\\\\\s*$",
+      "name": "constant.character.escape.line-continuation.qmake"
+    },
+    "value": {
+      "patterns": [
+        {
+          "include": "#string"
+        },
+        {
+          "match": "\\$\\$\\[[A-Za-z_][A-Za-z0-9_/]*\\]",
+          "name": "variable.language.property.qmake"
+        },
+        {
+          "match": "\\$\\$\\(([A-Za-z_][A-Za-z0-9_]*)\\)",
+          "name": "variable.other.environment.qmake"
+        },
+        {
+          "match": "\\$\\$\\{?([A-Za-z_][A-Za-z0-9_.]*)\\}?(?=\\s*\\()",
+          "name": "support.function.replace.qmake"
+        },
+        {
+          "match": "\\$\\$\\{?[A-Za-z_][A-Za-z0-9_.]*\\}?",
+          "name": "variable.other.qmake"
+        },
+        {
+          "match": "\\b(app|lib|subdirs|aux|vcapp|vclib)\\b",
+          "name": "constant.language.template.qmake"
+        },
+        {
+          "match": "\\b(core|gui|widgets|qml|quick|quickcontrols2|network|sql|svg|xml|multimedia|multimediawidgets|serialport|concurrent|printsupport|opengl|openglwidgets|websockets|webengine|webenginewidgets|charts|3dcore|testlib|dbus|bluetooth|positioning|sensors|uitools|designer|c\\+\\+[0-9a-z]+|console|thread|warn_on|warn_off|ordered|plugin|staticlib|dll|resources_big|lrelease|embed_translations)\\b",
+          "name": "constant.other.config.qmake"
+        },
+        {
+          "match": "\\b\\d+(\\.\\d+)*\\b",
+          "name": "constant.numeric.qmake"
+        },
+        {
+          "include": "#line-continuation"
+        },
+        {
+          "match": "[{}]",
+          "name": "punctuation.section.block.qmake"
+        }
+      ]
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.qmake",
+      "patterns": [
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.qmake"
+        },
+        {
+          "match": "\\$\\$\\{?[A-Za-z_][A-Za-z0-9_.]*\\}?",
+          "name": "variable.other.qmake"
+        }
+      ]
+    }
+  }
+}
