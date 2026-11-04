@@ -39,6 +39,89 @@
       ]
     },
     {
+      "id": "tungvu-vms.qt-dev-python-lsp",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/tungvu-vms/orca-qt-pack.git",
+        "ref": "main",
+        "path": "plugins/qt-lsp"
+      },
+      "description": "VS Code-style editor views for Qt developers: Ctrl+Click / F12 to go to definition, hover, completion, diagnostics and semantic colors for Python (basedpyright, auto-selects the project's interpreter), QML (qmlls) and C/C++ (clangd).",
+      "categories": [
+        "commands-panels"
+      ],
+      "releases": [
+        {
+          "version": "0.2.0",
+          "commit": "367294bac843c9c22c2d596df2b59662ed431634",
+          "contentHash": "c9390581d495db7b729f01eeb584d1943800d579936487fb645662f966078f50",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Qt Code Intelligence (Python, QML, C++)",
+          "contributes": [
+            {
+              "kind": "events",
+              "name": "workspace.removed"
+            },
+            {
+              "kind": "customEditors",
+              "name": "Python (LSP)",
+              "detail": ".py, .pyi, .pyw"
+            },
+            {
+              "kind": "customEditors",
+              "name": "QML (LSP)",
+              "detail": ".qml"
+            },
+            {
+              "kind": "customEditors",
+              "name": "C++ (LSP)",
+              "detail": ".cpp, .cc, .cxx, .c, .h, .hpp, .hh, .hxx, .inl, .ipp"
+            }
+          ],
+          "capabilities": [
+            "workspace:read",
+            "workspace:write",
+            "settings:own",
+            "storage:own"
+          ],
+          "fileTypes": [
+            "py",
+            "pyi",
+            "pyw",
+            "qml",
+            "cpp",
+            "cc",
+            "cxx",
+            "c",
+            "h",
+            "hpp",
+            "hh",
+            "hxx",
+            "inl",
+            "ipp"
+          ],
+          "editorFileTypes": [
+            "py",
+            "pyi",
+            "pyw",
+            "qml",
+            "cpp",
+            "cc",
+            "cxx",
+            "c",
+            "h",
+            "hpp",
+            "hh",
+            "hxx",
+            "inl",
+            "ipp"
+          ],
+          "license": "MIT"
+        }
+      ]
+    },
+    {
       "id": "tungvu-vms.qt-dev-syntax",
       "source": {
         "kind": "git",
@@ -158,9 +241,9 @@
       ],
       "releases": [
         {
-          "version": "0.1.0",
-          "commit": "47d58e18f978a706cebfd0598316d3dd1f5a1d14",
-          "contentHash": "eed8b107058efdf9960f62448274c7f298726e3e4b32708becf92de8058c09b2",
+          "version": "0.1.1",
+          "commit": "367294bac843c9c22c2d596df2b59662ed431634",
+          "contentHash": "6cf9a3f2de89c6a078808abe9ffac96eb2dd4834f50966e86c107fc53f63c2b2",
           "execution": "trusted-worker",
           "minimumOrca": "1.4.248",
           "name": "Qt Developer Tools",
