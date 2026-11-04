@@ -403,7 +403,9 @@ async function main() {
       for (const loc of d.locations) {
         if (sameFile(loc.path, path)) { out.push({ uri: model.uri, range: toRange(loc.range) }); continue }
         // Monaco can mot model that cho moi dich den (ke ca khi minh tu mo tab Orca), neu khong se "Model not found".
-        const scheme = loc.inWorkspace ? 'orca-ws' : 'orca-lib'
+        // Mo duoc thanh tab Orca (file trong workspace, ke ca venv/site-packages cua du an) -> orca-ws; con lai peek
+        const toTab = loc.openable ?? loc.inWorkspace
+        const scheme = toTab ? 'orca-ws' : 'orca-lib'
         // File lon chi gui mot cua so dong: moi vung ~2000 dong mot model rieng (query w=) de nhay cho khac van co noi dung
         const uri = monaco.Uri.from({ scheme, path: '/' + loc.path.replace(/\\/g, '/'), query: `w=${Math.floor(loc.range.start.line / 2000)}` })
         let target = monaco.editor.getModel(uri)
@@ -413,7 +415,7 @@ async function main() {
           target = monaco.editor.getModel(uri) ?? monaco.editor.createModel(r?.text ?? '', peekLang, uri)
           if (peekLang !== LANG) void installTextMate(peekLang as Lang)
         }
-        if (loc.inWorkspace) pendingReveal = loc
+        if (toTab) pendingReveal = loc
         out.push({ uri, range: toRange(loc.range) })
       }
       return out
@@ -432,7 +434,9 @@ async function main() {
         const loc = pendingReveal
         pendingReveal = null
         const r = await req<{ opened: boolean; rel?: string }>('lsp.reveal', { path: loc.path, line: loc.range.start.line + 1 }).catch(reportError)
-        setStatus(r?.opened ? `Đã mở ${r.rel}, định nghĩa ở dòng ${loc.range.start.line + 1}` : `Không mở được ${shortName(loc.path)}`, r?.opened ? 'ok' : 'err')
+        if (r?.opened) { setStatus(`Đã mở ${r.rel}, dòng ${loc.range.start.line + 1}`, 'ok'); return null }
+        // Khong mo duoc tab (vd. Orca cu, ngoai workspace): xem nhanh ngay tai cho
+        editor.trigger('lsp', 'editor.action.peekDefinition', null)
         return null
       }
       if (target.scheme === 'orca-lib') {

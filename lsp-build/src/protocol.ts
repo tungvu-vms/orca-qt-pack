@@ -1,7 +1,8 @@
 // Hop dong editor <-> worker cho Qt LSP. Vi tri dung quy uoc LSP (dong/cot tu 0, cot tinh theo UTF-16).
 export interface Pos { line: number; character: number }
 export interface Range { start: Pos; end: Pos }
-export interface Loc { path: string; range: Range; inWorkspace: boolean }
+/** inWorkspace: file cua du an (khong phai thu vien). openable: nam trong mot workspace Orca -> mo duoc thanh tab (ke ca venv, build). */
+export interface Loc { path: string; range: Range; inWorkspace: boolean; openable?: boolean }
 
 export type Lang = 'python' | 'qml' | 'cpp'
 /** `hash` = sha1 noi dung (CRLF -> LF), de khong vuot gioi han tin ~1 MiB voi file lon. `text` chi cho ban cu. */

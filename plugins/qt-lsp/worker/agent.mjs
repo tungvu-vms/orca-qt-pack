@@ -943,6 +943,7 @@ function createCore(host) {
     let r = await srv.client.request("textDocument/definition", { textDocument: { uri: uriOf(path) }, position });
     if ((!r || Array.isArray(r) && !r.length) && srv.lang === "cpp") r = await srv.client.request("textDocument/declaration", { textDocument: { uri: uriOf(path) }, position }).catch(() => null);
     const list = r ? Array.isArray(r) ? r : [r] : [];
+    const wsRoots = [...(await host.roots().catch(() => ({ roots: [] }))).roots, srv.root].map((x) => resolve3(x));
     const locations = [];
     for (const l of list) {
       const u = l.uri ?? l.targetUri;
@@ -952,7 +953,7 @@ function createCore(host) {
       } catch {
         continue;
       }
-      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root) });
+      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r2) => norm(p).startsWith(norm(r2) + sep)) });
     }
     return JSON.parse(JSON.stringify({ locations }));
   });
@@ -1049,7 +1050,7 @@ function createCore(host) {
 }
 
 // src/agent.ts
-var AGENT_VERSION = "0.4.1";
+var AGENT_VERSION = "0.4.2";
 var HOME = join5(homedir3(), ".orca-qt-lsp");
 mkdirSync2(HOME, { recursive: true });
 process.env.QT_LSP_DIR ??= HOME;

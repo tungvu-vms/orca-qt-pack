@@ -4,6 +4,7 @@
 // may nao co file thi chay agent o do va nho cho du an; nut ⇄ o thanh trang thai de doi may cho tung du an.
 // Duong dan file o may khac duoc danh dau "@<host>:<duong dan>" de editor dung nguyen nhu duong dan thuong.
 import type { OrcaWorkerApi } from 'orca/worker'
+import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -70,7 +71,48 @@ export function sshConfigHosts(auto = false, configPath = join(homedir(), '.ssh'
   return [...new Set(out)]
 }
 
+/** CLI `orca` di kem ban Orca dang chay (resources/bin), roi cho cai mac dinh. Linux: khong dung `orca` tren PATH
+ *  (thuong la trinh doc man hinh GNOME). */
+function orcaCli(): string | null {
+  const exe = WIN ? 'orca.exe' : 'orca'
+  const res = (process as unknown as { resourcesPath?: string }).resourcesPath
+  const c = [
+    process.env.ORCA_CLI_COMMAND,
+    res && join(res, 'bin', exe),
+    WIN ? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'Programs', 'orca', 'resources', 'bin', exe) : '/Applications/Orca.app/Contents/Resources/bin/orca',
+    WIN ? undefined : join(homedir(), 'Applications', 'Orca.app', 'Contents', 'Resources', 'bin', 'orca')
+  ]
+  return c.find((p): p is string => !!p && existsSync(p)) ?? null
+}
+const CLI = orcaCli()
+let cliLog: (m: string) => void = () => {}
+
+/** Mo file thanh tab Orca o dong `line` (1-based) trong workspace `wsPath`, dua nguoi dung toi tab do. */
+function cliOpen(file: string, wsPath: string, line: number): Promise<boolean> {
+  if (!CLI) return Promise.resolve(false)
+  const args = ['file', 'open', file, '--line', String(Math.max(1, line)), '--worktree', `path:${wsPath}`, '--focus', '--json']
+  return new Promise((done) => {
+    // Worker cua plugin chay voi bien moi truong rut gon (thieu APPDATA/LOCALAPPDATA tren Windows, XDG... tren Linux):
+    // CLI can chung de tim file metadata cua Orca dang chay.
+    const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir()
+    const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: undefined }
+    if (WIN) {
+      env.APPDATA ??= join(h, 'AppData', 'Roaming')
+      env.LOCALAPPDATA ??= join(h, 'AppData', 'Local')
+      env.USERPROFILE ??= h
+    } else env.HOME ??= h
+    execFile(CLI, args, { timeout: 15000, windowsHide: true, env }, (err, stdout) => {
+      let ok = false
+      try { ok = JSON.parse(stdout).ok === true } catch { /* */ }
+      if (!ok) cliLog(`orca file open failed: ${CLI} ${args.join(' ')} -> ${(err?.message ?? '').slice(0, 200)} ${stdout.slice(0, 300)}`)
+      done(ok)
+    })
+  })
+}
+
 export default function activate(orca: OrcaWorkerApi): void {
+  cliLog = (m) => orca.log(m)
+  orca.log(`orca cli: ${CLI ?? 'không tìm thấy'}`)
   const setting = async <T,>(k: string, fallback: T): Promise<T> => {
     try { const v = await orca.settings.get(k); return (v === undefined || v === null || v === '' ? fallback : v) as T } catch { return fallback }
   }
@@ -99,10 +141,13 @@ export default function activate(orca: OrcaWorkerApi): void {
       const p = norm(resolve(path))
       let ws: (typeof workspaces)[number] | null = null
       for (const w of workspaces) if (isLocal(w) && p.startsWith(norm(resolve(w.path)) + (WIN ? '\\' : '/')) && (!ws || w.path.length > ws.path.length)) ws = w
+      // Ngoai moi workspace (thu vien chuan, typeshed...): Orca khong mo tab duoc -> editor hien peek
       if (!ws) return { opened: false, reason: 'outside' }
       const rel = resolve(path).slice(resolve(ws.path).length + 1).split(/[\\/]/).join('/')
+      // `orca file open --line` mo tab va dat con tro dung dong (editor.open cua plugin khong co dong)
+      if (await cliOpen(resolve(path), ws.path, line)) return { opened: true, line, rel }
       await orca.host.call('editor.open', { workspaceId: ws.id, path: rel })
-      return { opened: true, line, rel }
+      return { opened: true, line: 1, rel }
     }
   })
 
@@ -247,7 +292,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const a = await agentFor(target.host)
     const out = tagPaths(target.host, await a.call(name, { ...input, path: target.path }))
     // May khac: Orca khong mo duoc tab cho file do qua plugin -> editor hien peek thay vi mo tab
-    if (name === 'lsp.definition' && out?.locations) for (const l of out.locations) l.inWorkspace = false
+    if (name === 'lsp.definition' && out?.locations) for (const l of out.locations) { l.inWorkspace = false; l.openable = false }
     return out
   }
 

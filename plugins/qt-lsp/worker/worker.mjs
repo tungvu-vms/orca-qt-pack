@@ -1,4 +1,5 @@
 // src/worker.ts
+import { execFile } from "node:child_process";
 import { existsSync as existsSync6, readFileSync as readFileSync3 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
@@ -942,6 +943,7 @@ function createCore(host) {
     let r = await srv.client.request("textDocument/definition", { textDocument: { uri: uriOf(path) }, position });
     if ((!r || Array.isArray(r) && !r.length) && srv.lang === "cpp") r = await srv.client.request("textDocument/declaration", { textDocument: { uri: uriOf(path) }, position }).catch(() => null);
     const list = r ? Array.isArray(r) ? r : [r] : [];
+    const wsRoots = [...(await host.roots().catch(() => ({ roots: [] }))).roots, srv.root].map((x) => resolve3(x));
     const locations = [];
     for (const l of list) {
       const u = l.uri ?? l.targetUri;
@@ -951,7 +953,7 @@ function createCore(host) {
       } catch {
         continue;
       }
-      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root) });
+      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r2) => norm(p).startsWith(norm(r2) + sep)) });
     }
     return JSON.parse(JSON.stringify({ locations }));
   });
@@ -1381,7 +1383,45 @@ function sshConfigHosts(auto = false, configPath = join5(homedir3(), ".ssh", "co
   }
   return [...new Set(out)];
 }
+function orcaCli() {
+  const exe2 = WIN4 ? "orca.exe" : "orca";
+  const res = process.resourcesPath;
+  const c = [
+    process.env.ORCA_CLI_COMMAND,
+    res && join5(res, "bin", exe2),
+    WIN4 ? join5(process.env.LOCALAPPDATA ?? join5(homedir3(), "AppData", "Local"), "Programs", "orca", "resources", "bin", exe2) : "/Applications/Orca.app/Contents/Resources/bin/orca",
+    WIN4 ? void 0 : join5(homedir3(), "Applications", "Orca.app", "Contents", "Resources", "bin", "orca")
+  ];
+  return c.find((p) => !!p && existsSync6(p)) ?? null;
+}
+var CLI = orcaCli();
+var cliLog = () => {
+};
+function cliOpen(file, wsPath, line) {
+  if (!CLI) return Promise.resolve(false);
+  const args = ["file", "open", file, "--line", String(Math.max(1, line)), "--worktree", `path:${wsPath}`, "--focus", "--json"];
+  return new Promise((done) => {
+    const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir3();
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: void 0 };
+    if (WIN4) {
+      env.APPDATA ??= join5(h, "AppData", "Roaming");
+      env.LOCALAPPDATA ??= join5(h, "AppData", "Local");
+      env.USERPROFILE ??= h;
+    } else env.HOME ??= h;
+    execFile(CLI, args, { timeout: 15e3, windowsHide: true, env }, (err, stdout) => {
+      let ok = false;
+      try {
+        ok = JSON.parse(stdout).ok === true;
+      } catch {
+      }
+      if (!ok) cliLog(`orca file open failed: ${CLI} ${args.join(" ")} -> ${(err?.message ?? "").slice(0, 200)} ${stdout.slice(0, 300)}`);
+      done(ok);
+    });
+  });
+}
 function activate(orca) {
+  cliLog = (m) => orca.log(m);
+  orca.log(`orca cli: ${CLI ?? "kh\xF4ng t\xECm th\u1EA5y"}`);
   const setting = async (k, fallback) => {
     try {
       const v = await orca.settings.get(k);
@@ -1417,8 +1457,9 @@ function activate(orca) {
       for (const w of workspaces) if (isLocal(w) && p.startsWith(norm2(resolve4(w.path)) + (WIN4 ? "\\" : "/")) && (!ws || w.path.length > ws.path.length)) ws = w;
       if (!ws) return { opened: false, reason: "outside" };
       const rel = resolve4(path).slice(resolve4(ws.path).length + 1).split(/[\\/]/).join("/");
+      if (await cliOpen(resolve4(path), ws.path, line)) return { opened: true, line, rel };
       await orca.host.call("editor.open", { workspaceId: ws.id, path: rel });
-      return { opened: true, line, rel };
+      return { opened: true, line: 1, rel };
     }
   });
   const agents = /* @__PURE__ */ new Map();
@@ -1566,7 +1607,10 @@ function activate(orca) {
     if (name === "lsp.reveal") return { opened: false, reason: "remote" };
     const a = await agentFor(target.host);
     const out = tagPaths(target.host, await a.call(name, { ...input, path: target.path }));
-    if (name === "lsp.definition" && out?.locations) for (const l of out.locations) l.inWorkspace = false;
+    if (name === "lsp.definition" && out?.locations) for (const l of out.locations) {
+      l.inWorkspace = false;
+      l.openable = false;
+    }
     return out;
   };
   orca.panels.handle("lsp.attach", (input) => attach(input));

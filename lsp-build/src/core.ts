@@ -455,12 +455,13 @@ export function createCore(host: CoreEnv): Core {
     // clangd: tren khai bao (header) definition tro ve chinh no -> thu declaration de nhay qua lai .h/.cpp
     if ((!r || (Array.isArray(r) && !r.length)) && srv.lang === 'cpp') r = await srv.client.request('textDocument/declaration', { textDocument: { uri: uriOf(path) }, position }).catch(() => null)
     const list = r ? (Array.isArray(r) ? r : [r]) : []
+    const wsRoots = [...(await host.roots().catch(() => ({ roots: [] as string[] }))).roots, srv.root].map((x) => resolve(x))
     const locations: Loc[] = []
     for (const l of list) {
       const u = l.uri ?? l.targetUri
       let p: string
       try { p = fileURLToPath(u) } catch { continue }
-      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root) })
+      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r) => norm(p).startsWith(norm(r) + sep)) })
     }
     return JSON.parse(JSON.stringify({ locations }))
   })

@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "qt-dev-python-lsp",
   "name": "Qt Code Intelligence (Python, QML, C++)",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "execution": "trusted-worker",
   "pluginApi": 1,
   "description": "VS Code-style editor views for Qt developers: Ctrl+Click / F12 to go to definition, hover, completion, diagnostics and semantic colors for Python (basedpyright, auto-selects the project's interpreter), QML (qmlls) and C/C++ (clangd). Works on files of other machines too, over SSH.",
