@@ -498,50 +498,57 @@ function activate(orca) {
     const m = pool.find((w) => w.name === ctx.displayName && (w.branch ?? "") === (ctx.branch ?? "")) ?? pool.find((w) => w.name === ctx.displayName);
     return m?.path ?? null;
   }
+  const MAX_FILES = 6e4;
   function indexFor(root) {
     const cached = hashIndex.get(root);
     if (cached && Date.now() - cached.at < 3e5) return cached.byHash;
-    const byHash = /* @__PURE__ */ new Map();
+    const bySize = /* @__PURE__ */ new Map();
     let count = 0;
     const walk = (dir, depth) => {
-      if (depth > 10 || count > 8e3) return;
-      let names = [];
+      if (depth > 12 || count > MAX_FILES) return;
+      let ents = [];
       try {
-        names = readdirSync3(dir);
+        ents = readdirSync3(dir, { withFileTypes: true });
       } catch {
         return;
       }
-      for (const n of names) {
+      for (const e of ents) {
+        const n = e.name;
+        if (e.isDirectory()) {
+          if (!SKIP2.has(n) && !n.startsWith(".") && !/^(build|out|cmake-build-)/i.test(n)) walk(join3(dir, n), depth + 1);
+          continue;
+        }
+        if (!e.isFile() || !langOfPath(n)) continue;
         const full = join3(dir, n);
-        let st;
+        let size;
         try {
-          st = statSync3(full);
+          size = statSync3(full).size;
         } catch {
           continue;
         }
-        if (st.isDirectory()) {
-          if (!SKIP2.has(n) && !n.startsWith(".") && !/^(build|out|cmake-build-)/i.test(n)) walk(full, depth + 1);
-          continue;
-        }
-        if (!langOfPath(n)) continue;
         count++;
-        if (st.size > 2e6) {
-          const k = `size:${st.size}`;
-          byHash.set(k, [...byHash.get(k) ?? [], full]);
-          continue;
-        }
-        try {
-          const h = sha(readFileSync2(full, "utf8"));
-          const list = byHash.get(h) ?? [];
-          list.push(full);
-          byHash.set(h, list);
-        } catch {
-        }
+        const k = `size:${size}`;
+        const list = bySize.get(k);
+        if (list) list.push(full);
+        else bySize.set(k, [full]);
       }
     };
     walk(root, 0);
-    hashIndex.set(root, { at: Date.now(), byHash });
-    return byHash;
+    hashIndex.set(root, { at: Date.now(), byHash: bySize });
+    return bySize;
+  }
+  const hashCache = /* @__PURE__ */ new Map();
+  function fileHash(p) {
+    try {
+      const st = statSync3(p);
+      const c = hashCache.get(p);
+      if (c && c.mtime === st.mtimeMs && c.size === st.size) return c.h;
+      const h = sha(readFileSync2(p, "utf8").replace(/^﻿/, ""));
+      hashCache.set(p, { mtime: st.mtimeMs, size: st.size, h });
+      return h;
+    } catch {
+      return null;
+    }
   }
   const SAVED_KEY = "interpreters";
   async function savedInterpreters() {
@@ -720,22 +727,13 @@ function activate(orca) {
     const focused = await focusedRoot().catch(() => null);
     const { workspaces } = await orca.host.call("workspace.list", {});
     const known = [...servers.values()].map((s) => s.root);
-    const roots = [...known, focused, ...workspaces.filter(isLocal).map((w) => resolve3(w.path))].filter((r, i, a) => !!r && a.findIndex((x) => x && norm(x) === norm(r)) === i);
+    const roots = [focused, ...known, ...workspaces.filter(isLocal).map((w) => resolve3(w.path))].filter((r, i, a) => !!r && a.findIndex((x) => x && norm(x) === norm(r)) === i);
     const h = input.hash ?? sha(input.text ?? "");
-    const bigHits = (byHash) => {
-      const sizes = [input.size, input.sizeCrlf].filter((s) => typeof s === "number" && s > 2e6);
-      const out = [];
-      for (const s of sizes) for (const p of byHash.get(`size:${s}`) ?? []) {
-        try {
-          if (sha(readFileSync2(p, "utf8")) === h) out.push(p);
-        } catch {
-        }
-      }
-      return out;
-    };
+    const sizes = [input.size, input.sizeCrlf].filter((s) => typeof s === "number").flatMap((s) => [s, s + 3]);
     const find = (r) => {
       const idx = indexFor(r);
-      return [...idx.get(h) ?? [], ...bigHits(idx)].filter((p) => langOfPath(p) === lang);
+      const cands = sizes.length ? sizes.flatMap((s) => idx.get(`size:${s}`) ?? []) : [...idx.values()].flat();
+      return [...new Set(cands)].filter((p) => langOfPath(p) === lang && fileHash(p) === h);
     };
     let wsRoot = null;
     let hits = [];

@@ -59,37 +59,51 @@ export default function activate(orca: OrcaWorkerApi): void {
     return m?.path ?? null
   }
 
-  /** Bang bam noi dung file nguon (py/qml/c++) trong workspace (lam moi sau 20 giay). */
+  /** Chi muc RE theo kich thuoc file (khong doc noi dung): "size:<bytes>" -> duong dan.
+   *  Du an lon (a large project: 10k thu muc, 8.7k file nguon, 127 MB) bam het mat ~11 s/workspace va vuot gioi han so file;
+   *  nen chi bam nhung file cung kich thuoc voi file dang mo (thuong 1-3 file).
+   *  Thu muc build sinh ra bi bo qua khi quet. */
+  const MAX_FILES = 60000
   function indexFor(root: string): Map<string, string[]> {
     const cached = hashIndex.get(root)
     if (cached && Date.now() - cached.at < 300000) return cached.byHash
-    const byHash = new Map<string, string[]>()
+    const bySize = new Map<string, string[]>()
     let count = 0
     const walk = (dir: string, depth: number) => {
-      if (depth > 10 || count > 8000) return
-      let names: string[] = []
-      try { names = readdirSync(dir) } catch { return }
-      for (const n of names) {
+      if (depth > 12 || count > MAX_FILES) return
+      let ents: import('node:fs').Dirent[] = []
+      try { ents = readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const e of ents) {
+        const n = e.name
+        if (e.isDirectory()) {
+          if (!SKIP.has(n) && !n.startsWith('.') && !/^(build|out|cmake-build-)/i.test(n)) walk(join(dir, n), depth + 1)
+          continue
+        }
+        if (!e.isFile() || !langOfPath(n)) continue
         const full = join(dir, n)
-        let st
-        try { st = statSync(full) } catch { continue }
-        if (st.isDirectory()) { if (!SKIP.has(n) && !n.startsWith('.') && !/^(build|out|cmake-build-)/i.test(n)) walk(full, depth + 1); continue }
-        if (!langOfPath(n)) continue
+        let size: number
+        try { size = statSync(full).size } catch { continue }
         count++
-        // File lon (vd. resources_rc.py 19 MB do pyside6-rcc sinh): khong bam ca file khi quet (cham, ton RAM);
-        // ghi theo kich thuoc, khi attach moi bam nhung file cung kich thuoc.
-        if (st.size > 2_000_000) { const k = `size:${st.size}`; byHash.set(k, [...(byHash.get(k) ?? []), full]); continue }
-        try {
-          const h = sha(readFileSync(full, 'utf8'))
-          const list = byHash.get(h) ?? []
-          list.push(full)
-          byHash.set(h, list)
-        } catch { /* bo qua file khong doc duoc */ }
+        const k = `size:${size}`
+        const list = bySize.get(k)
+        if (list) list.push(full); else bySize.set(k, [full])
       }
     }
     walk(root, 0)
-    hashIndex.set(root, { at: Date.now(), byHash })
-    return byHash
+    hashIndex.set(root, { at: Date.now(), byHash: bySize })
+    return bySize
+  }
+  /** Bam noi dung co cache theo (duong dan, mtime, size). */
+  const hashCache = new Map<string, { mtime: number; size: number; h: string }>()
+  function fileHash(p: string): string | null {
+    try {
+      const st = statSync(p)
+      const c = hashCache.get(p)
+      if (c && c.mtime === st.mtimeMs && c.size === st.size) return c.h
+      const h = sha(readFileSync(p, 'utf8').replace(/^﻿/, ''))
+      hashCache.set(p, { mtime: st.mtimeMs, size: st.size, h })
+      return h
+    } catch { return null }
   }
 
   // ---------- Python interpreter ----------
@@ -269,20 +283,17 @@ export default function activate(orca: OrcaWorkerApi): void {
     const focused = await focusedRoot().catch(() => null)
     const { workspaces } = await orca.host.call('workspace.list', {})
     const known = [...servers.values()].map((s) => s.root)
-    const roots = [...known, focused, ...workspaces.filter(isLocal).map((w) => resolve(w.path))]
+    // Workspace dang focus truoc (tab vua mo thuong thuoc workspace nay), roi workspace da co server, roi cac workspace khac.
+    const roots = [focused, ...known, ...workspaces.filter(isLocal).map((w) => resolve(w.path))]
       .filter((r, i, a): r is string => !!r && a.findIndex((x) => x && norm(x) === norm(r)) === i)
     // Editor gui ma bam (file lon vuot gioi han 1 MiB cua kenh plugin); ban cu gui ca text.
     const h = input.hash ?? sha(input.text ?? '')
-    // File lon: editor gui them so byte UTF-8 (LF) va CRLF; so voi file cung kich thuoc tren dia roi moi bam.
-    const bigHits = (byHash: Map<string, string[]>): string[] => {
-      const sizes = [input.size, input.sizeCrlf].filter((s): s is number => typeof s === 'number' && s > 2_000_000)
-      const out: string[] = []
-      for (const s of sizes) for (const p of byHash.get(`size:${s}`) ?? []) { try { if (sha(readFileSync(p, 'utf8')) === h) out.push(p) } catch { /* */ } }
-      return out
-    }
-    const find = (r: string) => {
+    // Editor gui so byte UTF-8 (ban LF va ban CRLF): chi bam nhung file tren dia co dung kich thuoc do.
+    const sizes = [input.size, input.sizeCrlf].filter((s): s is number => typeof s === 'number').flatMap((s) => [s, s + 3]) // +3: BOM UTF-8
+    const find = (r: string): string[] => {
       const idx = indexFor(r)
-      return [...(idx.get(h) ?? []), ...bigHits(idx)].filter((p) => langOfPath(p) === lang)
+      const cands = sizes.length ? sizes.flatMap((s) => idx.get(`size:${s}`) ?? []) : [...idx.values()].flat()
+      return [...new Set(cands)].filter((p) => langOfPath(p) === lang && fileHash(p) === h)
     }
     let wsRoot: string | null = null
     let hits: string[] = []
