@@ -1,0 +1,18 @@
+{
+  "name": "orca-qt-lsp-build",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "monaco-editor": "0.52.2",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.2.0"
+  },
+  "devDependencies": {
+    "basedpyright": "^1.40.2",
+    "esbuild": "0.28.2",
+    "pyright": "1.1.414"
+  }
+}

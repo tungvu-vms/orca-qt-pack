@@ -1,0 +1,111 @@
+// Build plugin qt-lsp vao ../plugins/qt-lsp:
+//   editor/{python,qml,cpp}.html + assets/*.js|css   Monaco + provider LSP (frame cach ly), chung JS, khac data-lang
+//   worker/worker.mjs                            worker Node (client LSP, do duong dan file)
+//   server/pyright/*                             Pyright (MIT) chep nguyen tu npm
+// Moi file <= 1 MiB (gioi han cua Orca), file lon hon thi tach chunk.
+// Dung: npm ci --ignore-scripts && node build.mjs
+import { build } from 'esbuild'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+
+const HERE = import.meta.dirname
+const PLUGIN = path.resolve(HERE, '..', 'plugins', 'qt-lsp')
+const MAX = 1024 * 1024
+
+for (const d of ['editor', 'worker', 'server']) rmSync(path.join(PLUGIN, d), { recursive: true, force: true })
+mkdirSync(path.join(PLUGIN, 'editor', 'assets'), { recursive: true })
+
+// Plugin: ?worker -> build rieng worker cua Monaco thanh file, tra ve class Worker
+const workerPlugin = {
+  name: 'monaco-worker',
+  setup(b) {
+    b.onResolve({ filter: /\?worker$/ }, (args) => ({ path: path.join(HERE, 'node_modules', args.path.replace(/\?worker$/, '')), namespace: 'worker' }))
+    b.onLoad({ filter: /.*/, namespace: 'worker' }, async (args) => {
+      const r = await build({ entryPoints: [args.path], bundle: true, write: false, format: 'iife', minify: true, target: 'chrome120', legalComments: 'none' })
+      const name = 'editor.worker.js'
+      writeFileSync(path.join(PLUGIN, 'editor', 'assets', name), r.outputFiles[0].contents)
+      return { contents: `export default class extends Worker { constructor() { super(new URL('./${name}', import.meta.url)) } }`, loader: 'js' }
+    })
+  }
+}
+
+const page = await build({
+  entryPoints: { editor: path.join(HERE, 'src', 'editor.ts') },
+  bundle: true,
+  splitting: true,
+  format: 'esm',
+  platform: 'browser',
+  target: 'chrome120',
+  minify: true,
+  legalComments: 'none',
+  outdir: path.join(PLUGIN, 'editor', 'assets'),
+  entryNames: '[name]',
+  chunkNames: 'chunk-[hash]',
+  assetNames: '[name]-[hash]',
+  loader: { '.ttf': 'file', '.wasm': 'base64' },
+  external: ['orca/*'],
+  plugins: [workerPlugin],
+  metafile: true,
+  logLevel: 'warning'
+})
+writeFileSync(path.join(HERE, 'meta.json'), JSON.stringify(page.metafile))
+
+const css = readdirSync(path.join(PLUGIN, 'editor', 'assets')).filter((f) => f.endsWith('.css'))
+const PAGES = { python: 'Python (LSP)', qml: 'QML (LSP)', cpp: 'C++ (LSP)' }
+for (const [lang, title] of Object.entries(PAGES)) writeFileSync(path.join(PLUGIN, 'editor', `${lang}.html`), `<!doctype html>
+<html data-lang="${lang}">
+<head>
+<meta charset="utf-8">
+<title>${title}</title>
+${css.map((c) => `<link rel="stylesheet" href="./assets/${c}">`).join('\n')}
+<style>
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--orca-background, #1e1e1e); }
+body { display: flex; flex-direction: column; font: 12px system-ui, "Segoe UI", sans-serif; color: var(--orca-foreground, #ccc); }
+#editor { flex: 1; min-height: 0; }
+#bar { display: flex; align-items: center; border-top: 1px solid var(--orca-border, #333); background: var(--orca-background); }
+#interp { flex: none; margin: 0 6px; padding: 2px 8px; font: inherit; color: var(--orca-foreground, #ccc); background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+#interp:hover { background: var(--orca-accent, #333); }
+#picker { position: fixed; left: 50%; top: 40px; transform: translateX(-50%); width: min(620px, 90vw); max-height: 60vh; display: flex; flex-direction: column; background: var(--orca-popover, #252526); color: var(--orca-popover-foreground, #ccc); border: 1px solid var(--orca-border, #444); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 50; }
+#picker[hidden] { display: none; }
+#picker-filter { margin: 8px; padding: 6px 8px; font: inherit; color: inherit; background: var(--orca-background, #1e1e1e); border: 1px solid var(--orca-input, #555); border-radius: 4px; outline: none; }
+#picker-list { overflow: auto; padding: 0 4px 6px; }
+.pk { padding: 5px 8px; border-radius: 4px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+.pk.sel, .pk:hover { background: var(--orca-accent, #04395e); }
+.pk b { font-weight: 600; } .pk small { opacity: .65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .pk i { font-style: normal; opacity: .65; margin-left: auto; }
+#status { flex: 1; min-width: 0; padding: 3px 10px; color: var(--orca-muted-foreground, #999); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#status[data-tone="warn"] { color: #d7a700; }
+#status[data-tone="err"] { color: var(--orca-destructive, #f14c4c); }
+#status[data-tone="busy"] { opacity: .7; }
+</style>
+<script type="module" src="./assets/editor.js"></script>
+</head>
+<body>
+<div id="editor"></div>
+<div id="bar"><div id="status" data-tone="busy">Đang khởi động…</div><button id="interp" type="button" title="Chọn interpreter Python" hidden></button></div>
+<div id="picker" hidden><input id="picker-filter" placeholder="Chọn interpreter Python (gõ để lọc)…" spellcheck="false"><div id="picker-list" role="listbox"></div></div>
+</body>
+</html>
+`)
+
+await build({
+  entryPoints: { worker: path.join(HERE, 'src', 'worker.ts') },
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: 'node20',
+  outdir: path.join(PLUGIN, 'worker'),
+  outExtension: { '.js': '.mjs' },
+  external: ['orca/*'],
+  logLevel: 'warning'
+})
+
+// Pyright khong goi vao plugin (typeshed > 2000 file): cai len may, worker tu tim.
+
+// Kiem tra gioi han cua Orca
+let files = 0, bytes = 0
+const big = []
+const walk = (d) => { for (const n of readdirSync(d)) { const f = path.join(d, n); const s = statSync(f); if (s.isDirectory()) walk(f); else { files++; bytes += s.size; if (s.size > MAX) big.push(`${path.relative(PLUGIN, f)} ${(s.size / 1048576).toFixed(2)} MiB`) } } }
+walk(PLUGIN)
+console.log(`plugin: ${files} file, ${(bytes / 1048576).toFixed(1)} MiB`)
+if (big.length) console.log('FILE > 1 MiB:\n  ' + big.join('\n  '))
+if (files > 2000 || bytes > 50 * MAX) console.log('VUOT GIOI HAN 2000 file / 50 MiB')

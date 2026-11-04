@@ -21,7 +21,7 @@ async function focusedWorkspace(orca: OrcaWorkerApi): Promise<Workspace | null> 
   const ctx = await orca.host.call('workspace.readContext', {})
   if (!ctx) return null
   const { workspaces } = await orca.host.call('workspace.list', {})
-  const local = workspaces.filter((w) => !w.hostId)
+  const local = workspaces.filter(isLocal)
   const pool = local.length ? local : workspaces
   const match = pool.find((w) => w.name === ctx.displayName && (w.branch ?? '') === (ctx.branch ?? ''))
     ?? pool.find((w) => w.name === ctx.displayName)
@@ -108,6 +108,9 @@ function formatQml(qmlformat: string, text: string): string | null {
     rmSync(dir, { recursive: true, force: true })
   }
 }
+
+/** Orca tra hostId 'local' (hoac null) cho may nay; khac thi la may tu xa qua SSH. */
+const isLocal = (w: { hostId: string | null }) => !w.hostId || w.hostId === 'local'
 
 export default function activate(orca: OrcaWorkerApi): void {
   // qmlformat tim mot lan, lam lai khi setting doi

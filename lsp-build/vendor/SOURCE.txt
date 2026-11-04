@@ -1,0 +1,3 @@
+Copied from VS Code 1.144.1 (38ed30f01031ca05f59fb111be203efae74036c2) built-in extensions "python", "cpp" and "theme-defaults", MIT.
+MagicPython grammar: MagicStack Inc., MIT.
+QML grammar: seanwu1105/vscode-qt-for-python (MIT) via stablyai/orca-plugins; JavaScript grammar: microsoft/vscode (MIT).

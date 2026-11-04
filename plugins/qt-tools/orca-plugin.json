@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "qt-dev-tools",
   "name": "Qt Developer Tools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "execution": "trusted-worker",
   "pluginApi": 1,
   "description": "Qt, QML, PySide6 and PyQt tools in Orca: a panel that finds the project's .ui, .qrc, .qml and .ts files and runs Designer, uic, rcc, qmllint, lupdate/lrelease, CMake and qmake in a workspace terminal, plus qmlformat on save.",
