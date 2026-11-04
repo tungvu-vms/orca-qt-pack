@@ -338,10 +338,15 @@ export default function activate(orca: OrcaWorkerApi): void {
       // Workspace dang focus nam tren may khac (SSH / runtime ghep doi): worker chi doc duoc dia cua may nay.
       const ctx = await orca.host.call('workspace.readContext', {}).catch(() => null)
       const remote = ctx ? workspaces.find((w) => !isLocal(w) && w.name === ctx.displayName) : undefined
-      const message = remote
-        ? `Workspace "${remote.name}" nằm trên máy khác (${remote.hostId}); plugin chỉ đọc được file trên máy đang chạy Orca này. Mở dự án dưới dạng workspace cục bộ để dùng Ctrl+Click.`
+      // Workspace dang focus khong co trong danh sach workspace cuc bo (vd. workspace cua may ghep doi qua runtime): cung la may khac.
+      const notLocal = !!ctx && !workspaces.some((w) => isLocal(w) && w.name === ctx.displayName)
+      const message = remote || notLocal
+        ? `Workspace "${remote?.name ?? ctx?.displayName}" nằm trên máy khác${remote?.hostId ? ` (${remote.hostId})` : ''}; plugin chỉ đọc được file trên máy đang chạy Orca này. Mở bản dự án có sẵn trên máy này (workspace cục bộ) để dùng Ctrl+Click.`
         : 'Không tìm thấy file này trong workspace cục bộ nào của Orca (file mở ngoài workspace, hoặc workspace ở máy khác).'
-      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message }
+      const remoteCount = workspaces.filter((w) => !isLocal(w)).length
+      const scanned = roots.map((r) => `${r} (${[...(hashIndex.get(r)?.byHash.values() ?? [])].reduce((n, l) => n + l.length, 0)} file)`)
+      console.log(`attach miss: lang=${lang} size=${input.size} sizeCrlf=${input.sizeCrlf} hash=${h} focused=${focused} remote=${remoteCount} roots=${scanned.join(' | ')}`)
+      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: `${message} [${roots.length} workspace đã quét, ${workspaces.length - roots.length} bỏ qua; ${input.size ?? '?'} byte]` }
     }
     // Workspace long nhau: dung workspace Orca dai nhat chua file, roi goc du an theo ngon ngu.
     let ws = wsRoot

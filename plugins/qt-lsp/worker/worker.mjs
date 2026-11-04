@@ -802,8 +802,12 @@ function activate(orca) {
     if (!wsRoot) {
       const ctx = await orca.host.call("workspace.readContext", {}).catch(() => null);
       const remote = ctx ? workspaces.find((w) => !isLocal(w) && w.name === ctx.displayName) : void 0;
-      const message = remote ? `Workspace "${remote.name}" n\u1EB1m tr\xEAn m\xE1y kh\xE1c (${remote.hostId}); plugin ch\u1EC9 \u0111\u1ECDc \u0111\u01B0\u1EE3c file tr\xEAn m\xE1y \u0111ang ch\u1EA1y Orca n\xE0y. M\u1EDF d\u1EF1 \xE1n d\u01B0\u1EDBi d\u1EA1ng workspace c\u1EE5c b\u1ED9 \u0111\u1EC3 d\xF9ng Ctrl+Click.` : "Kh\xF4ng t\xECm th\u1EA5y file n\xE0y trong workspace c\u1EE5c b\u1ED9 n\xE0o c\u1EE7a Orca (file m\u1EDF ngo\xE0i workspace, ho\u1EB7c workspace \u1EDF m\xE1y kh\xE1c).";
-      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message };
+      const notLocal = !!ctx && !workspaces.some((w) => isLocal(w) && w.name === ctx.displayName);
+      const message = remote || notLocal ? `Workspace "${remote?.name ?? ctx?.displayName}" n\u1EB1m tr\xEAn m\xE1y kh\xE1c${remote?.hostId ? ` (${remote.hostId})` : ""}; plugin ch\u1EC9 \u0111\u1ECDc \u0111\u01B0\u1EE3c file tr\xEAn m\xE1y \u0111ang ch\u1EA1y Orca n\xE0y. M\u1EDF b\u1EA3n d\u1EF1 \xE1n c\xF3 s\u1EB5n tr\xEAn m\xE1y n\xE0y (workspace c\u1EE5c b\u1ED9) \u0111\u1EC3 d\xF9ng Ctrl+Click.` : "Kh\xF4ng t\xECm th\u1EA5y file n\xE0y trong workspace c\u1EE5c b\u1ED9 n\xE0o c\u1EE7a Orca (file m\u1EDF ngo\xE0i workspace, ho\u1EB7c workspace \u1EDF m\xE1y kh\xE1c).";
+      const remoteCount = workspaces.filter((w) => !isLocal(w)).length;
+      const scanned = roots.map((r) => `${r} (${[...hashIndex.get(r)?.byHash.values() ?? []].reduce((n, l) => n + l.length, 0)} file)`);
+      console.log(`attach miss: lang=${lang} size=${input.size} sizeCrlf=${input.sizeCrlf} hash=${h} focused=${focused} remote=${remoteCount} roots=${scanned.join(" | ")}`);
+      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: `${message} [${roots.length} workspace \u0111\xE3 qu\xE9t, ${workspaces.length - roots.length} b\u1ECF qua; ${input.size ?? "?"} byte]` };
     }
     let ws = wsRoot;
     for (const w of workspaces) if (isLocal(w) && norm(hits[0]).startsWith(norm(resolve3(w.path)) + sep) && resolve3(w.path).length > ws.length) ws = resolve3(w.path);
