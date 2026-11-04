@@ -52,9 +52,9 @@
       ],
       "releases": [
         {
-          "version": "0.2.2",
-          "commit": "5e0085be0e2e8fab46f79eb587efed861fd3f510",
-          "contentHash": "e118dc6a8891bc48cdc9c2e2846d9bcfccc7adfd946de0c617d727b4ffbd6000",
+          "version": "0.2.3",
+          "commit": "4b6ff6a923dee6345489ec74856e9649e94e1c5a",
+          "contentHash": "5335a1201edfa855a6599e27ee5fb906449f27ceb7735bdeba23c0e34f402427",
           "execution": "trusted-worker",
           "minimumOrca": "1.4.248",
           "name": "Qt Code Intelligence (Python, QML, C++)",
