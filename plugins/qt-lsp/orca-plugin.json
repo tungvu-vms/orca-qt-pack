@@ -2,21 +2,33 @@
   "manifestVersion": 2,
   "id": "qt-dev-python-lsp",
   "name": "Qt Code Intelligence (Python, QML, C++)",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "execution": "trusted-worker",
   "pluginApi": 1,
-  "description": "VS Code-style editor views for Qt developers: Ctrl+Click / F12 to go to definition, hover, completion, diagnostics and semantic colors for Python (basedpyright, auto-selects the project's interpreter), QML (qmlls) and C/C++ (clangd).",
+  "description": "VS Code-style editor views for Qt developers: Ctrl+Click / F12 to go to definition, hover, completion, diagnostics and semantic colors for Python (basedpyright, auto-selects the project's interpreter), QML (qmlls) and C/C++ (clangd). Works on files of other machines too, over SSH.",
   "license": "MIT",
-  "author": { "name": "GPS Tech Vietnam" },
-  "engines": { "orca": ">=1.4.248" },
+  "author": {
+    "name": "GPS Tech Vietnam"
+  },
+  "engines": {
+    "orca": ">=1.4.248"
+  },
   "main": "worker/worker.mjs",
   "contributes": {
-    "events": [ { "on": "workspace.removed" } ],
+    "events": [
+      {
+        "on": "workspace.removed"
+      }
+    ],
     "customEditors": [
       {
         "id": "python-lsp",
         "title": "Python (LSP)",
-        "extensions": [".py", ".pyi", ".pyw"],
+        "extensions": [
+          ".py",
+          ".pyi",
+          ".pyw"
+        ],
         "entry": "editor/python.html",
         "priority": "option",
         "contentKind": "text",
@@ -25,7 +37,9 @@
       {
         "id": "qml-lsp",
         "title": "QML (LSP)",
-        "extensions": [".qml"],
+        "extensions": [
+          ".qml"
+        ],
         "entry": "editor/qml.html",
         "priority": "option",
         "contentKind": "text",
@@ -34,7 +48,18 @@
       {
         "id": "cpp-lsp",
         "title": "C++ (LSP)",
-        "extensions": [".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hh", ".hxx", ".inl", ".ipp"],
+        "extensions": [
+          ".cpp",
+          ".cc",
+          ".cxx",
+          ".c",
+          ".h",
+          ".hpp",
+          ".hh",
+          ".hxx",
+          ".inl",
+          ".ipp"
+        ],
         "entry": "editor/cpp.html",
         "priority": "option",
         "contentKind": "text",
@@ -42,18 +67,90 @@
       }
     ],
     "settings": [
-      { "key": "python", "title": "Python interpreter", "description": "Force one interpreter for every project. Empty (recommended): pick per project like VS Code (.vscode setting, project venv with the highest Python, then the highest installed Python).", "type": "string", "default": "" },
-      { "key": "pyrightPath", "title": "Pyright language server", "description": "Path to basedpyright's or pyright's langserver.index.js. Empty: %LOCALAPPDATA%\\orca-qt-lsp, then the global npm folder.", "type": "string", "default": "" },
-      { "key": "nodePath", "title": "Node.js", "description": "Node used to run Pyright. Empty: node on PATH.", "type": "string", "default": "" },
-      { "key": "qtBin", "title": "Qt bin folder", "description": "Kit bin folder holding qmlls (e.g. C:\\Qt\\6.12.0\\mingw_64\\bin). Empty: newest Qt under C:\\Qt or ~/Qt.", "type": "string", "default": "" },
-      { "key": "qmllsPath", "title": "qmlls", "description": "Path to qmlls. Empty: from the Qt bin folder.", "type": "string", "default": "" },
-      { "key": "clangdPath", "title": "clangd", "description": "Path to clangd. Empty: Qt Creator's, LLVM's, then PATH.", "type": "string", "default": "" }
+      {
+        "key": "python",
+        "title": "Python interpreter",
+        "description": "Force one interpreter for every project. Empty (recommended): pick per project like VS Code (.vscode setting, project venv with the highest Python, then the highest installed Python).",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "pyrightPath",
+        "title": "Pyright language server",
+        "description": "Path to basedpyright's or pyright's langserver.index.js. Empty: %LOCALAPPDATA%\\orca-qt-lsp, then the global npm folder.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "nodePath",
+        "title": "Node.js",
+        "description": "Node used to run Pyright. Empty: node on PATH.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "qtBin",
+        "title": "Qt bin folder",
+        "description": "Kit bin folder holding qmlls (e.g. C:\\Qt\\6.12.0\\mingw_64\\bin). Empty: newest Qt under C:\\Qt or ~/Qt.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "qmllsPath",
+        "title": "qmlls",
+        "description": "Path to qmlls. Empty: from the Qt bin folder.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "clangdPath",
+        "title": "clangd",
+        "description": "Path to clangd. Empty: Qt Creator's, LLVM's, then PATH.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "remoteHosts",
+        "title": "Remote SSH hosts",
+        "description": "SSH hosts (names from ~/.ssh/config, or user@host) to search when the open file is not on this machine — e.g. a workspace on another computer. Separate with commas. Needs key login (no password prompt) and Node.js 18+ on that host; the plugin copies its agent to ~/.orca-qt-lsp there and installs basedpyright if missing.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "remoteRoots",
+        "title": "Remote project folders",
+        "description": "Optional: project folders on the remote hosts to search (separate with ;). Searched anyway: folders used before, Orca's workspaces on that host (when Orca is installed there), then the home folder.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "sshPath",
+        "title": "ssh",
+        "description": "Path to the ssh program. Empty: the system OpenSSH.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "remoteNode",
+        "title": "Remote node path",
+        "description": "Optional: Node.js on the remote hosts when it is not on the SSH PATH (e.g. /home/me/.nvm/versions/node/v20.11.0/bin/node).",
+        "type": "string",
+        "default": ""
+      }
     ]
   },
   "capabilities": [
-    { "kind": "workspace:read" },
-    { "kind": "workspace:write" },
-    { "kind": "settings:own" },
-    { "kind": "storage:own" }
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    },
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "storage:own"
+    }
   ]
 }

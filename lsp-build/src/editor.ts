@@ -165,7 +165,9 @@ async function main() {
   const att = await req<AttachOutput>('lsp.attach', { language: LANG, hash: await sha1Lf(lfText), size: lfBytes, sizeCrlf: lfBytes + lineBreaks }, 90000).catch((e) => ({ ok: false, path: null, candidates: 0, workspace: null, server: null, message: String(e) }) as AttachOutput)
   if (!att.path) { setStatus(att.message ?? 'Không gắn được LSP', 'err'); return }
   const path = att.path
-  const rel = att.workspace ? path.slice(att.workspace.length + 1).replace(/\\/g, '/') : path
+  // File o may khac (qua SSH): worker tra duong dan "@<host>:<duong dan>"
+  const remoteHost = /^@([^:]+):/.exec(path)?.[1]
+  const rel = (remoteHost ? `🖧 ${remoteHost} • ` : '') + (att.workspace ? path.slice(att.workspace.length + 1).replace(/\\/g, '/') : path)
   if (!att.ok) { setStatus(`${rel}: ${att.message}`, 'err'); return }
   setStatus(`${SERVER} • ${rel}${att.server && att.server.includes('(') ? ' • ' + att.server.slice(att.server.indexOf('(') + 1, -1) : ''}${att.candidates > 1 ? ` • ⚠ ${att.candidates} file trùng nội dung, có thể nhận nhầm` : ''}`, att.candidates > 1 ? 'warn' : 'ok')
 

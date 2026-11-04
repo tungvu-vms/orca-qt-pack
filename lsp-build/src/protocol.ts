@@ -5,7 +5,7 @@ export interface Loc { path: string; range: Range; inWorkspace: boolean }
 
 export type Lang = 'python' | 'qml' | 'cpp'
 /** `hash` = sha1 noi dung (CRLF -> LF), de khong vuot gioi han tin ~1 MiB voi file lon. `text` chi cho ban cu. */
-export interface AttachInput { language: Lang; hash?: string; text?: string; size?: number; sizeCrlf?: number }
+export interface AttachInput { language: Lang; hash?: string; text?: string; size?: number; sizeCrlf?: number; /** worker -> agent: duong dan workspace Orca biet tren may kia */ hints?: string[] }
 export interface AttachOutput {
   ok: boolean
   /** Duong dan tuyet doi file da do ra; null neu khong tim thay */

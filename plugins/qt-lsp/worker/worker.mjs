@@ -1,4 +1,9 @@
 // src/worker.ts
+import { readFileSync as readFileSync3 } from "node:fs";
+import { dirname as dirname4, join as join4, resolve as resolve4 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// src/core.ts
 import { createHash } from "node:crypto";
 import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync2, statSync as statSync3 } from "node:fs";
 import { dirname as dirname3, join as join3, resolve as resolve3, sep } from "node:path";
@@ -42,13 +47,13 @@ var LspClient = class {
   request(method, params, timeoutMs = 15e3) {
     if (this.exited) return Promise.reject(new Error("language server exited"));
     const id = ++this.nextId;
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve5, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         this.notify("$/cancelRequest", { id });
         reject(new Error(`${method} timed out`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve4, reject, timer });
+      this.pending.set(id, { resolve: resolve5, reject, timer });
       this.write({ jsonrpc: "2.0", id, method, params });
     });
   }
@@ -469,7 +474,7 @@ function projectRootFor2(lang, file, limit) {
   return resolve2(limit);
 }
 
-// src/worker.ts
+// src/core.ts
 var SKIP2 = /* @__PURE__ */ new Set([
   "node_modules",
   ".git",
@@ -496,30 +501,24 @@ var SKIP2 = /* @__PURE__ */ new Set([
 ]);
 var sha = (s) => createHash("sha1").update(s.replace(/\r\n/g, "\n")).digest("hex");
 var WIN3 = process.platform === "win32";
-var PLUGIN_DIR = resolve3(dirname3(fileURLToPath(import.meta.url)), "..");
-var isLocal = (w) => !w.hostId || w.hostId === "local";
+var pluginDir = () => process.env.QT_LSP_DIR || resolve3(dirname3(fileURLToPath(import.meta.url)), "..");
 var norm = (p) => WIN3 ? p.toLowerCase() : p;
 var key = (lang, root) => `${lang}|${norm(root)}`;
 var langOfPath = (p) => EXTS_OF_LANG.python.test(p) ? "python" : EXTS_OF_LANG.qml.test(p) ? "qml" : EXTS_OF_LANG.cpp.test(p) ? "cpp" : null;
-function activate(orca) {
+function createCore(host) {
+  const handlers = {};
+  const handle = (name, fn) => {
+    handlers[name] = fn;
+  };
   const servers = /* @__PURE__ */ new Map();
   const hashIndex = /* @__PURE__ */ new Map();
   async function setting(k, fallback) {
     try {
-      const v = await orca.settings.get(k);
+      const v = await host.setting(k, null);
       return v === void 0 || v === null || v === "" ? fallback : v;
     } catch {
       return fallback;
     }
-  }
-  async function focusedRoot() {
-    const ctx = await orca.host.call("workspace.readContext", {});
-    if (!ctx) return null;
-    const { workspaces } = await orca.host.call("workspace.list", {});
-    const local = workspaces.filter(isLocal);
-    const pool = local.length ? local : workspaces;
-    const m = pool.find((w) => w.name === ctx.displayName && (w.branch ?? "") === (ctx.branch ?? "")) ?? pool.find((w) => w.name === ctx.displayName);
-    return m?.path ?? null;
   }
   const MAX_FILES = 2e5;
   const skipDir = (n) => SKIP2.has(n) || n.startsWith(".") || /^(build|out|cmake-build-)/i.test(n);
@@ -587,7 +586,7 @@ function activate(orca) {
   const SAVED_KEY = "interpreters";
   async function savedInterpreters() {
     try {
-      const v = await orca.storage.get(SAVED_KEY);
+      const v = await host.storageGet(SAVED_KEY);
       return v && typeof v === "object" ? v : {};
     } catch {
       return {};
@@ -607,15 +606,15 @@ function activate(orca) {
     const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir2();
     const local = process.env.LOCALAPPDATA ?? (WIN3 ? join3(h, "AppData", "Local") : join3(h, ".local", "share"));
     const appData = process.env.APPDATA ?? (WIN3 ? join3(h, "AppData", "Roaming") : void 0);
-    const c = [join3(PLUGIN_DIR, "server", "pyright", "langserver.index.js"), join3(local, "orca-qt-lsp", "node_modules", "basedpyright", "langserver.index.js")];
+    const c = [join3(pluginDir(), "server", "pyright", "langserver.index.js"), join3(local, "orca-qt-lsp", "node_modules", "basedpyright", "langserver.index.js")];
     if (appData) c.push(join3(appData, "npm", "node_modules", "basedpyright", "langserver.index.js"), join3(appData, "npm", "node_modules", "pyright", "langserver.index.js"));
     for (const p of ["/usr/local", "/opt/homebrew", join3(h, ".npm-global")]) c.push(join3(p, "lib", "node_modules", "basedpyright", "langserver.index.js"), join3(p, "lib", "node_modules", "pyright", "langserver.index.js"));
     return c.find((p) => existsSync3(p)) ?? null;
   }
   async function commandFor(lang, root) {
     if (lang === "python") {
-      const entry = await setting("pyrightPath", "") || pyrightEntry();
-      if (!entry) throw new Error('Kh\xF4ng t\xECm th\u1EA5y basedpyright/Pyright. C\xE0i: npm i --prefix "%LOCALAPPDATA%\\orca-qt-lsp" basedpyright');
+      const entry = await setting("pyrightPath", "") || pyrightEntry() || (host.installPyright ? await host.installPyright() : null);
+      if (!entry) throw new Error(`Kh\xF4ng t\xECm th\u1EA5y basedpyright/Pyright tr\xEAn m\xE1y ${process.platform}. C\xE0i (c\u1EA7n Node.js 18+ k\xE8m npm): npm i --prefix ${WIN3 ? '"%LOCALAPPDATA%\\orca-qt-lsp"' : "~/.local/share/orca-qt-lsp"} basedpyright@1.40.2`);
       const node = await setting("nodePath", "") || findNode();
       return { cmd: node, args: [entry, "--stdio"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, detail: entry.includes("basedpyright") ? "basedpyright" : "pyright" };
     }
@@ -641,17 +640,17 @@ function activate(orca) {
     const existing = servers.get(key(lang, root));
     if (existing && !existing.client.exited) return existing;
     const { cmd, args, env, detail } = await commandFor(lang, root);
-    orca.log(`spawn ${lang}: ${cmd} ${args.join(" ")} (root ${root})`);
-    const client = new LspClient(cmd, args, lang === "python" ? PLUGIN_DIR : root, env);
-    client.log = (l) => orca.log(`[${lang}] ${l}`);
+    host.log(`spawn ${lang}: ${cmd} ${args.join(" ")} (root ${root})`);
+    const client = new LspClient(cmd, args, lang === "python" ? pluginDir() : root, env);
+    client.log = (l) => host.log(`[${lang}] ${l}`);
     const srv = { lang, root, client, ready: Promise.resolve(), open: /* @__PURE__ */ new Map(), diagnostics: /* @__PURE__ */ new Map(), legend: null, interpreter: null, detail };
     client.onExit = (code) => {
-      orca.log(`${lang} server exited (${code}) for ${root}`);
+      host.log(`${lang} server exited (${code}) for ${root}`);
       if (servers.get(key(lang, root)) === srv) servers.delete(key(lang, root));
     };
     if (lang === "python") {
       srv.interpreter = (await interpretersFor(root, file))[0] ?? null;
-      orca.log(`interpreter for ${root}: ${srv.interpreter ? `${srv.interpreter.path} [${srv.interpreter.source}]` : "none"}`);
+      host.log(`interpreter for ${root}: ${srv.interpreter ? `${srv.interpreter.path} [${srv.interpreter.source}]` : "none"}`);
     }
     client.onRequest("workspace/configuration", (params) => params.items.map((it) => {
       if (lang !== "python") return {};
@@ -666,10 +665,10 @@ function activate(orca) {
     client.onRequest("client/registerCapability", () => null);
     client.onRequest("window/showMessageRequest", () => null);
     client.onRequest("workspace/semanticTokens/refresh", () => {
-      orca.panels.post("lsp.refresh", { lang, root });
+      host.post("lsp.refresh", { lang, root });
       return null;
     });
-    client.onNotification("window/showMessage", (p) => orca.log(`[${lang}] ${p?.message ?? ""}`));
+    client.onNotification("window/showMessage", (p) => host.log(`[${lang}] ${p?.message ?? ""}`));
     client.onNotification("textDocument/publishDiagnostics", (p) => {
       let path;
       try {
@@ -682,7 +681,7 @@ function activate(orca) {
         items: p.diagnostics.map((d) => ({ range: d.range, severity: d.severity ?? 1, message: d.message, source: d.source ?? SERVER_LABEL[lang], code: typeof d.code === "object" ? d.code?.value : d.code }))
       };
       srv.diagnostics.set(norm(path), out);
-      orca.panels.post("lsp.diagnostics", { path, version: out.version, items: out.items.slice(0, 300).map((d) => ({ ...d, message: String(d.message).slice(0, 500) })) });
+      host.post("lsp.diagnostics", { path, version: out.version, items: out.items.slice(0, 300).map((d) => ({ ...d, message: String(d.message).slice(0, 500) })) });
     });
     const rootUri = pathToFileURL(root).href;
     srv.ready = client.request("initialize", {
@@ -712,7 +711,7 @@ function activate(orca) {
     });
     servers.set(key(lang, root), srv);
     await srv.ready;
-    orca.log(`${lang} ready for ${root} (${detail})`);
+    host.log(`${lang} ready for ${root} (${detail})`);
     return srv;
   }
   function serverOf(lang, path) {
@@ -728,12 +727,11 @@ function activate(orca) {
   async function rootForFile(lang, path) {
     const hit = attachedRoots.get(`${lang}|${norm(path)}`);
     if (hit) return hit;
-    const { workspaces } = await orca.host.call("workspace.list", {});
+    const { roots } = await host.roots();
     const p = norm(resolve3(path));
     let best = null;
-    for (const w of workspaces) {
-      if (!isLocal(w)) continue;
-      const r = resolve3(w.path);
+    for (const w of [...roots, ...[...servers.values()].map((s) => s.root)]) {
+      const r = resolve3(w);
       if (p.startsWith(norm(r) + sep) && (!best || r.length > best.length)) best = r;
     }
     if (!best) return null;
@@ -756,12 +754,12 @@ function activate(orca) {
     }
     return srv;
   }
-  orca.panels.handle("lsp.attach", async (input) => {
+  handle("lsp.attach", async (input) => {
     const lang = input.language;
-    const focused = await focusedRoot().catch(() => null);
-    const { workspaces } = await orca.host.call("workspace.list", {});
+    const listed = await host.roots(input.hints).catch(() => ({ focused: null, roots: [] }));
+    const focused = listed.focused;
     const known = [...servers.values()].map((s) => s.root);
-    const roots = [focused, ...known, ...workspaces.filter(isLocal).map((w) => resolve3(w.path))].filter((r, i, a) => !!r && a.findIndex((x) => x && norm(x) === norm(r)) === i);
+    const roots = [focused, ...known, ...listed.roots.map((w) => resolve3(w))].filter((r, i, a) => !!r && a.findIndex((x) => x && norm(x) === norm(r)) === i);
     const h = input.hash ?? sha(input.text ?? "");
     const sizes = [input.size, input.sizeCrlf].filter((s) => typeof s === "number").flatMap((s) => [s, s + 3]);
     const sizeSet = new Set(sizes);
@@ -800,17 +798,12 @@ function activate(orca) {
       }
     }
     if (!wsRoot) {
-      const ctx = await orca.host.call("workspace.readContext", {}).catch(() => null);
-      const remote = ctx ? workspaces.find((w) => !isLocal(w) && w.name === ctx.displayName) : void 0;
-      const notLocal = !!ctx && !workspaces.some((w) => isLocal(w) && w.name === ctx.displayName);
-      const message = remote || notLocal ? `Workspace "${remote?.name ?? ctx?.displayName}" n\u1EB1m tr\xEAn m\xE1y kh\xE1c${remote?.hostId ? ` (${remote.hostId})` : ""}; plugin ch\u1EC9 \u0111\u1ECDc \u0111\u01B0\u1EE3c file tr\xEAn m\xE1y \u0111ang ch\u1EA1y Orca n\xE0y. M\u1EDF b\u1EA3n d\u1EF1 \xE1n c\xF3 s\u1EB5n tr\xEAn m\xE1y n\xE0y (workspace c\u1EE5c b\u1ED9) \u0111\u1EC3 d\xF9ng Ctrl+Click.` : "Kh\xF4ng t\xECm th\u1EA5y file n\xE0y trong workspace c\u1EE5c b\u1ED9 n\xE0o c\u1EE7a Orca (file m\u1EDF ngo\xE0i workspace, ho\u1EB7c workspace \u1EDF m\xE1y kh\xE1c).";
-      const remoteCount = workspaces.filter((w) => !isLocal(w)).length;
       const scanned = roots.map((r) => `${r} (${[...hashIndex.get(r)?.byHash.values() ?? []].reduce((n, l) => n + l.length, 0)} file)`);
-      console.log(`attach miss: lang=${lang} size=${input.size} sizeCrlf=${input.sizeCrlf} hash=${h} focused=${focused} remote=${remoteCount} roots=${scanned.join(" | ")}`);
-      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: `${message} [${roots.length} workspace \u0111\xE3 qu\xE9t, ${workspaces.length - roots.length} b\u1ECF qua; ${input.size ?? "?"} byte]` };
+      host.log(`attach miss: lang=${lang} size=${input.size} roots=${scanned.join(" | ")}`);
+      return { ok: false, path: null, candidates: 0, workspace: focused, server: null, message: `Kh\xF4ng t\xECm th\u1EA5y file n\xE0y (${roots.length} workspace \u0111\xE3 qu\xE9t).` };
     }
     let ws = wsRoot;
-    for (const w of workspaces) if (isLocal(w) && norm(hits[0]).startsWith(norm(resolve3(w.path)) + sep) && resolve3(w.path).length > ws.length) ws = resolve3(w.path);
+    for (const w of listed.roots) if (norm(hits[0]).startsWith(norm(resolve3(w)) + sep) && resolve3(w).length > ws.length) ws = resolve3(w);
     const root = projectRootFor2(lang, hits[0], ws);
     try {
       const srv = await serverFor(lang, root, hits[0]);
@@ -827,12 +820,12 @@ function activate(orca) {
     srv.open.set(norm(path), version);
     docs.set(norm(path), text);
   };
-  orca.panels.handle("lsp.open", async ({ path, text, version }) => {
+  handle("lsp.open", async ({ path, text, version }) => {
     const srv = await serverForPath(path);
     sendFull(srv, path, text ?? readFileSync2(path, "utf8"), version);
     return { ok: true };
   });
-  orca.panels.handle("lsp.change", async ({ path, text, version, edits, expectLength }) => {
+  handle("lsp.change", async ({ path, text, version, edits, expectLength }) => {
     const srv = await serverForPath(path);
     let next = text;
     if (next === void 0 && edits) {
@@ -848,7 +841,7 @@ function activate(orca) {
     return { ok: true };
   });
   const uploads = /* @__PURE__ */ new Map();
-  orca.panels.handle("lsp.upload", async ({ path, version, part, index, total }) => {
+  handle("lsp.upload", async ({ path, version, part, index, total }) => {
     const k = norm(path);
     if (index === 0) uploads.set(k, []);
     const parts = uploads.get(k);
@@ -859,7 +852,7 @@ function activate(orca) {
     sendFull(await serverForPath(path), path, parts.join(""), version);
     return { ok: true };
   });
-  orca.panels.handle("lsp.close", async ({ path }) => {
+  handle("lsp.close", async ({ path }) => {
     const lang = langOfPath(path);
     const srv = lang ? serverOf(lang, path) : null;
     if (srv?.open.delete(norm(path))) srv.client.notify("textDocument/didClose", { textDocument: { uri: uriOf(path) } });
@@ -877,12 +870,12 @@ function activate(orca) {
       setTimeout(() => srv.client.kill(), 500);
     });
   }
-  orca.events.on("workspace.removed", ({ path }) => {
+  const workspaceRemoved = (path) => {
     for (const s of [...servers.values()]) if (norm(s.root) === norm(path) || norm(s.root).startsWith(norm(path) + sep)) stopServer(s);
-  });
+  };
   const LIB_RE = /[\\/](site-packages|\.venv|venv|env|node_modules|typeshed-fallback|include|Qt[\\/]\d|mingw\d*_64|qml[\\/]Qt|QtQuick)[\\/]/i;
   const isLibPath = (p, root) => !norm(p).startsWith(norm(root) + sep) || LIB_RE.test(p.slice(root.length)) || /[\\/](build|out|cmake-build-[^\\/]*)[\\/]/i.test(p.slice(root.length));
-  orca.panels.handle("lsp.hover", async ({ path, position }) => {
+  handle("lsp.hover", async ({ path, position }) => {
     const srv = await serverForPath(path);
     const r = await srv.client.request("textDocument/hover", { textDocument: { uri: uriOf(path) }, position });
     if (!r) return { markdown: null, range: null };
@@ -890,7 +883,7 @@ function activate(orca) {
     const md = typeof c === "string" ? c : Array.isArray(c) ? c.map((x) => typeof x === "string" ? x : "```" + (x.language ?? "") + "\n" + x.value + "\n```").join("\n\n") : c?.kind === "plaintext" ? "```\n" + c.value + "\n```" : c?.value ?? null;
     return JSON.parse(JSON.stringify({ markdown: md ?? null, range: r.range ?? null }));
   });
-  orca.panels.handle("lsp.definition", async ({ path, position }) => {
+  handle("lsp.definition", async ({ path, position }) => {
     const srv = await serverForPath(path);
     let r = await srv.client.request("textDocument/definition", { textDocument: { uri: uriOf(path) }, position });
     if ((!r || Array.isArray(r) && !r.length) && srv.lang === "cpp") r = await srv.client.request("textDocument/declaration", { textDocument: { uri: uriOf(path) }, position }).catch(() => null);
@@ -908,7 +901,7 @@ function activate(orca) {
     }
     return JSON.parse(JSON.stringify({ locations }));
   });
-  orca.panels.handle("lsp.completion", async ({ path, position, trigger }) => {
+  handle("lsp.completion", async ({ path, position, trigger }) => {
     const srv = await serverForPath(path);
     const context = trigger ? { triggerKind: 2, triggerCharacter: trigger } : { triggerKind: 1 };
     const r = await srv.client.request("textDocument/completion", { textDocument: { uri: uriOf(path) }, position, context });
@@ -926,49 +919,49 @@ function activate(orca) {
     });
     return JSON.parse(JSON.stringify({ items, incomplete: Array.isArray(r) ? false : !!r?.isIncomplete }));
   });
-  orca.panels.handle("lsp.diagnostics", async ({ path }) => {
+  handle("lsp.diagnostics", async ({ path }) => {
     const lang = langOfPath(path);
     const srv = lang ? serverOf(lang, path) : null;
     const d = srv?.diagnostics.get(norm(path));
     return d ? { version: d.version, items: d.items.slice(0, 2e3).map((x) => ({ ...x, message: String(x.message).slice(0, 500) })) } : { version: -1, items: [] };
   });
-  orca.panels.handle("lsp.serverInfo", async ({ path }) => {
+  handle("lsp.serverInfo", async ({ path }) => {
     const srv = await serverForPath(path);
     return { lang: srv.lang, server: SERVER_LABEL[srv.lang], root: srv.root, detail: srv.detail };
   });
-  orca.panels.handle("lsp.restart", async ({ path }) => {
+  handle("lsp.restart", async ({ path }) => {
     const lang = langOfPath(path);
     const srv = lang ? serverOf(lang, path) : null;
     if (srv) stopServer(srv);
     const fresh = await serverForPath(path);
     return { detail: fresh.detail };
   });
-  orca.panels.handle("lsp.interpreters", async ({ path }) => {
+  handle("lsp.interpreters", async ({ path }) => {
     const srv = await serverForPath(path);
     if (srv.lang !== "python") return { root: srv.root, current: null, list: [] };
     const list = await interpretersFor(srv.root, path);
     return JSON.parse(JSON.stringify({ root: srv.root, current: srv.interpreter, list }));
   });
-  orca.panels.handle("lsp.setInterpreter", async ({ path, interpreter }) => {
+  handle("lsp.setInterpreter", async ({ path, interpreter }) => {
     const srv = await serverForPath(path);
     if (srv.lang !== "python") return { current: null };
     const saved = await savedInterpreters();
     if (interpreter) saved[norm(srv.root)] = interpreter;
     else delete saved[norm(srv.root)];
-    await orca.storage.set(SAVED_KEY, saved);
+    await host.storageSet(SAVED_KEY, saved);
     srv.interpreter = (await interpretersFor(srv.root, path))[0] ?? null;
     srv.client.notify("workspace/didChangeConfiguration", { settings: {} });
-    orca.log(`interpreter for ${srv.root} -> ${srv.interpreter?.path ?? "none"} [${srv.interpreter?.source ?? "-"}]`);
+    host.log(`interpreter for ${srv.root} -> ${srv.interpreter?.path ?? "none"} [${srv.interpreter?.source ?? "-"}]`);
     return JSON.parse(JSON.stringify({ current: srv.interpreter }));
   });
-  orca.panels.handle("lsp.semanticTokens", async ({ path }) => {
+  handle("lsp.semanticTokens", async ({ path }) => {
     const srv = await serverForPath(path);
     if (!srv.legend) return { legend: null, data: [] };
     const r = await srv.client.request("textDocument/semanticTokens/full", { textDocument: { uri: uriOf(path) } }, 2e4).catch(() => null);
     const data = Array.isArray(r?.data) ? r.data : [];
     return { legend: srv.legend, data: data.length > 15e4 ? data.slice(0, 15e4) : data };
   });
-  orca.panels.handle("lsp.peek", async ({ path }) => {
+  handle("lsp.peek", async ({ path }) => {
     if (!langOfPath(path) && !/(^|[\\/])[A-Z][A-Za-z0-9]*$/.test(path)) return { text: "", lang: null };
     const lang = langOfPath(path) ?? "cpp";
     try {
@@ -977,16 +970,322 @@ function activate(orca) {
       return { text: "", lang };
     }
   });
-  orca.panels.handle("lsp.reveal", async ({ path, line }) => {
+  handle("lsp.reveal", async ({ path, line }) => host.reveal ? host.reveal(path, line) : { opened: false, reason: "no-host" });
+  return { handlers, workspaceRemoved, shutdown: () => {
+    for (const s of [...servers.values()]) stopServer(s);
+  } };
+}
+
+// src/remote.ts
+import { spawn as spawn2 } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
+import { existsSync as existsSync4 } from "node:fs";
+import { createInterface } from "node:readline";
+var NODE_CANDIDATES = [
+  (a) => ["node", a],
+  (a) => ["/opt/homebrew/bin/node", a],
+  (a) => ["/usr/local/bin/node", a],
+  (a) => ["/usr/bin/node", a],
+  // nvm / fnm / volta / asdf: node khong nam tren PATH cua phien SSH khong tuong tac.
+  // Lenh duoi chay bang sh (Linux/macOS); tren Windows (cmd) se loi va bi bo qua.
+  (a) => ["sh", "-c", `'n=$(ls -d "$HOME"/.nvm/versions/node/*/bin/node "$HOME"/.local/share/fnm/node-versions/*/installation/bin/node "$HOME"/.volta/bin/node "$HOME"/.asdf/shims/node 2>/dev/null | sort -V | tail -1); [ -n "$n" ] && exec "$n" ${a}; exit 127'`],
+  (a) => ["bash", "-lc", `'exec node ${a}'`],
+  (a) => ["zsh", "-lc", `'exec node ${a}'`],
+  (a) => ["bash", "-ic", `'exec node ${a}'`]
+];
+function findSsh(setting) {
+  if (setting) return setting;
+  if (process.platform === "win32") {
+    const sys = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\OpenSSH\\ssh.exe`;
+    if (existsSync4(sys)) return sys;
+  }
+  return "ssh";
+}
+var RemoteAgent = class {
+  constructor(host, ssh, agentSource, settings) {
+    this.host = host;
+    this.ssh = ssh;
+    this.agentSource = agentSource;
+    this.settings = settings;
+    this.version = createHash2("sha1").update(agentSource).digest("hex").slice(0, 10);
+  }
+  host;
+  ssh;
+  agentSource;
+  settings;
+  proc = null;
+  nextId = 1;
+  pending = /* @__PURE__ */ new Map();
+  starting = null;
+  node = NODE_CANDIDATES[0];
+  info = null;
+  lastError = "";
+  onEvent = () => {
+  };
+  log = () => {
+  };
+  version;
+  get alive() {
+    return !!this.proc && this.proc.exitCode === null && !!this.info;
+  }
+  sshArgs(cmd) {
+    return ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", this.host, ...cmd];
+  }
+  /** Chay mot lenh ngan qua SSH, gui `input` vao stdin roi dong. */
+  run(cmd, input, timeoutMs = 6e4) {
+    return new Promise((resolve5) => {
+      const p = spawn2(this.ssh, this.sshArgs(cmd), { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      let out = "", err = "";
+      const t = setTimeout(() => {
+        try {
+          p.kill();
+        } catch {
+        }
+      }, timeoutMs);
+      p.stdout.on("data", (d) => {
+        out += d;
+      });
+      p.stderr.on("data", (d) => {
+        err += d;
+      });
+      p.on("error", (e) => {
+        err += e.message;
+      });
+      p.on("close", (code) => {
+        clearTimeout(t);
+        resolve5({ code, out, err });
+      });
+      p.stdin.end(input);
+    });
+  }
+  /** Chep agent sang may kia (neu chua co ban nay) va tim node dung duoc. */
+  async install() {
+    const b64 = Buffer.from(this.agentSource).toString("base64");
+    const script = `const fs=require('fs'),path=require('path'),os=require('os');const d=path.join(os.homedir(),'.orca-qt-lsp');fs.mkdirSync(d,{recursive:true});const f=path.join(d,'agent-${this.version}.mjs');if(!fs.existsSync(f)){fs.writeFileSync(f+'.tmp',Buffer.from('${b64}','base64'));fs.renameSync(f+'.tmp',f)}for(const n of fs.readdirSync(d))if(/^agent-[0-9a-f]+\\.mjs$/.test(n)&&n!=='agent-${this.version}.mjs')try{fs.unlinkSync(path.join(d,n))}catch{}console.log('QTLSP-OK '+process.version+' '+process.platform)
+`;
+    const tried = [];
+    const custom = String(this.settings.remoteNode ?? "").trim();
+    const candidates = custom ? [(a) => [custom, a], ...NODE_CANDIDATES] : NODE_CANDIDATES;
+    for (const node of candidates) {
+      const r = await this.run(node("-"), script);
+      if (r.out.includes("QTLSP-OK")) {
+        this.node = node;
+        this.log(`${this.host}: agent ${this.version} san sang (${r.out.trim().split(" ").slice(1).join(" ")}, ${node("").join(" ")})`);
+        return;
+      }
+      tried.push(`${node("").join(" ")}: ${(r.err || r.out).trim().split("\n").pop()?.slice(0, 160) ?? r.code}`);
+      if (r.code === 255) break;
+    }
+    const last = tried[tried.length - 1] ?? "";
+    const hint = /Host key verification|Permission denied|publickey|Could not resolve|timed out|Connection refused/i.test(last) ? `Ki\u1EC3m tra: ch\u1EA1y "ssh ${this.host}" m\u1ED9t l\u1EA7n trong terminal (ch\u1EA5p nh\u1EADn host key) v\xE0 d\xF9ng kh\xF3a SSH, kh\xF4ng m\u1EADt kh\u1EA9u.` : 'M\xE1y kia c\u1EA7n Node.js >= 18 (ho\u1EB7c \u0111\u1EB7t "Remote node path").';
+    throw new Error(`Kh\xF4ng ch\u1EA1y \u0111\u01B0\u1EE3c agent tr\xEAn ${this.host}: ${last}. ${hint}`);
+  }
+  start() {
+    if (this.alive && this.info) return Promise.resolve(this.info);
+    if (this.starting) return this.starting;
+    this.starting = (async () => {
+      await this.install();
+      const p = spawn2(this.ssh, this.sshArgs(this.node(`.orca-qt-lsp/agent-${this.version}.mjs`)), { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      this.proc = p;
+      let errTail = "";
+      p.stderr.on("data", (d) => {
+        errTail = (errTail + d).slice(-2e3);
+      });
+      p.on("error", (e) => {
+        this.lastError = e.message;
+      });
+      p.on("exit", (code) => {
+        this.lastError = `${this.host}: agent tho\xE1t (${code}) ${errTail.trim().split("\n").pop() ?? ""}`;
+        this.log(this.lastError);
+        this.info = null;
+        this.proc = null;
+        for (const x of this.pending.values()) {
+          clearTimeout(x.timer);
+          x.reject(new Error(this.lastError));
+        }
+        this.pending.clear();
+      });
+      createInterface({ input: p.stdout }).on("line", (line) => {
+        let m;
+        try {
+          m = JSON.parse(line);
+        } catch {
+          return;
+        }
+        if (m.log) {
+          this.log(`${this.host}: ${m.log}`);
+          return;
+        }
+        if (m.ev) {
+          this.onEvent(m.ev, m.p);
+          return;
+        }
+        const x = this.pending.get(m.id);
+        if (!x) return;
+        this.pending.delete(m.id);
+        clearTimeout(x.timer);
+        if ("e" in m) x.reject(new Error(m.e));
+        else x.resolve(m.r);
+      });
+      const info = await this.call("$hello", { settings: this.settings }, 3e4);
+      this.info = info;
+      return info;
+    })().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+  call(m, p, timeoutMs = 9e4) {
+    const proc = this.proc;
+    if (!proc || proc.exitCode !== null) return Promise.reject(new Error(this.lastError || `${this.host}: ch\u01B0a k\u1EBFt n\u1ED1i`));
+    const id = this.nextId++;
+    return new Promise((resolve5, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`${this.host}: ${m} qu\xE1 th\u1EDDi gian`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve: resolve5, reject, timer });
+      proc.stdin.write(JSON.stringify({ id, m, p }) + "\n");
+    });
+  }
+  /** Gui khong cho tra loi (vd. danh sach thu muc goc). */
+  notify(m, p) {
+    if (this.proc && this.proc.exitCode === null) this.proc.stdin.write(JSON.stringify({ id: 0, m, p }) + "\n");
+  }
+  stop() {
+    try {
+      this.proc?.stdin?.end();
+    } catch {
+    }
+    setTimeout(() => {
+      try {
+        this.proc?.kill();
+      } catch {
+      }
+    }, 2e3);
+  }
+};
+
+// src/worker.ts
+var WIN4 = process.platform === "win32";
+var norm2 = (p) => WIN4 ? p.toLowerCase() : p;
+var isLocal = (w) => !w.hostId || w.hostId === "local";
+var HERE = dirname4(fileURLToPath2(import.meta.url));
+var REMOTE_RE = /^@([^:]+):(.*)$/s;
+var tag = (host, p) => `@${host}:${p}`;
+var untag = (p) => {
+  const m = REMOTE_RE.exec(p);
+  return m ? { host: m[1], path: m[2] } : null;
+};
+function activate(orca) {
+  const setting = async (k, fallback) => {
+    try {
+      const v = await orca.settings.get(k);
+      return v === void 0 || v === null || v === "" ? fallback : v;
+    } catch {
+      return fallback;
+    }
+  };
+  async function localRoots() {
     const { workspaces } = await orca.host.call("workspace.list", {});
-    const p = norm(resolve3(path));
-    let ws = null;
-    for (const w of workspaces) if (isLocal(w) && p.startsWith(norm(resolve3(w.path)) + sep) && (!ws || w.path.length > ws.path.length)) ws = w;
-    if (!ws) return { opened: false, reason: "outside" };
-    const rel = resolve3(path).slice(resolve3(ws.path).length + 1).split(sep).join("/");
-    await orca.host.call("editor.open", { workspaceId: ws.id, path: rel });
-    return { opened: true, line, rel };
+    const local2 = workspaces.filter(isLocal);
+    let focused = null;
+    const ctx = await orca.host.call("workspace.readContext", {}).catch(() => null);
+    if (ctx) {
+      const m = local2.find((w) => w.name === ctx.displayName && (w.branch ?? "") === (ctx.branch ?? "")) ?? local2.find((w) => w.name === ctx.displayName);
+      focused = m?.path ?? null;
+    }
+    return { focused, roots: local2.map((w) => resolve4(w.path)) };
+  }
+  const local = createCore({
+    log: (m) => orca.log(m),
+    post: (ev, p) => orca.panels.post(ev, p),
+    setting,
+    storageGet: (k) => orca.storage.get(k),
+    storageSet: async (k, v) => {
+      await orca.storage.set(k, v);
+    },
+    roots: () => localRoots(),
+    reveal: async (path, line) => {
+      const { workspaces } = await orca.host.call("workspace.list", {});
+      const p = norm2(resolve4(path));
+      let ws = null;
+      for (const w of workspaces) if (isLocal(w) && p.startsWith(norm2(resolve4(w.path)) + (WIN4 ? "\\" : "/")) && (!ws || w.path.length > ws.path.length)) ws = w;
+      if (!ws) return { opened: false, reason: "outside" };
+      const rel = resolve4(path).slice(resolve4(ws.path).length + 1).split(/[\\/]/).join("/");
+      await orca.host.call("editor.open", { workspaceId: ws.id, path: rel });
+      return { opened: true, line, rel };
+    }
   });
+  const agents = /* @__PURE__ */ new Map();
+  let agentSource = null;
+  const hostsSetting = async () => String(await setting("remoteHosts", "")).split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+  async function agentFor(host) {
+    let a = agents.get(host);
+    if (!a) {
+      agentSource ??= readFileSync3(join4(HERE, "agent.mjs"), "utf8");
+      a = new RemoteAgent(host, findSsh(await setting("sshPath", "")), agentSource, { remoteRoots: await setting("remoteRoots", ""), remoteNode: await setting("remoteNode", "") });
+      a.log = (l) => orca.log(l);
+      a.onEvent = (ev, p) => {
+        if (p && typeof p.path === "string") p = { ...p, path: tag(host, p.path) };
+        orca.panels.post(ev, p);
+      };
+      agents.set(host, a);
+    }
+    await a.start();
+    return a;
+  }
+  async function remoteHints() {
+    const { workspaces } = await orca.host.call("workspace.list", {}).catch(() => ({ workspaces: [] }));
+    return workspaces.filter((w) => !isLocal(w)).map((w) => w.path);
+  }
+  const SKIP_KEYS = /* @__PURE__ */ new Set(["current", "list", "interpreter"]);
+  const tagPaths = (host, v) => {
+    if (Array.isArray(v)) return v.map((x) => tagPaths(host, x));
+    if (v && typeof v === "object") {
+      const o = {};
+      for (const [k, x] of Object.entries(v)) o[k] = SKIP_KEYS.has(k) ? x : (k === "path" || k === "workspace") && typeof x === "string" ? tag(host, x) : tagPaths(host, x);
+      return o;
+    }
+    return v;
+  };
+  async function attach(input) {
+    const res = await local.handlers["lsp.attach"](input);
+    if (res.path) return res;
+    const hosts = await hostsSetting();
+    if (!hosts.length) {
+      return { ...res, message: 'Kh\xF4ng t\xECm th\u1EA5y file n\xE0y tr\xEAn m\xE1y n\xE0y. N\u1EBFu file n\u1EB1m \u1EDF m\xE1y kh\xE1c (SSH, m\xE1y gh\xE9p n\u1ED1i): th\xEAm m\xE1y \u0111\xF3 v\xE0o Settings \u2192 Qt Code Intelligence \u2192 "Remote SSH hosts".' };
+    }
+    const hints = await remoteHints();
+    const errors = [];
+    for (const host of hosts) {
+      try {
+        const a = await agentFor(host);
+        const r = await a.call("lsp.attach", { ...input, hints }, 12e4);
+        if (r.path) return tagPaths(host, r);
+        errors.push(`${host}: kh\xF4ng c\xF3`);
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : String(e));
+      }
+    }
+    return { ...res, message: `Kh\xF4ng t\xECm th\u1EA5y file tr\xEAn m\xE1y n\xE0y v\xE0 tr\xEAn ${hosts.join(", ")} (${errors.join("; ")}). M\xE1y kia: th\xEAm th\u01B0 m\u1EE5c d\u1EF1 \xE1n v\xE0o "Remote project folders" n\u1EBFu kh\xF4ng ph\u1EA3i workspace Orca.` };
+  }
+  const route = (name) => async (input) => {
+    const target = input && typeof input.path === "string" ? untag(input.path) : null;
+    if (!target) return local.handlers[name](input);
+    const a = await agentFor(target.host);
+    if (name === "lsp.reveal") return { opened: false, reason: "remote" };
+    const out = tagPaths(target.host, await a.call(name, { ...input, path: target.path }));
+    if (name === "lsp.definition" && out?.locations) for (const l of out.locations) l.inWorkspace = false;
+    return out;
+  };
+  orca.panels.handle("lsp.attach", (input) => attach(input));
+  for (const name of Object.keys(local.handlers)) if (name !== "lsp.attach") orca.panels.handle(name, route(name));
+  orca.panels.handle("lsp.remoteStatus", async () => ({
+    hosts: await hostsSetting(),
+    agents: [...agents.values()].map((a) => ({ host: a.host, alive: a.alive, info: a.info, error: a.lastError }))
+  }));
+  orca.events.on("workspace.removed", ({ path }) => local.workspaceRemoved(path));
 }
 function deactivate() {
 }

@@ -87,6 +87,20 @@ body { display: flex; flex-direction: column; font: 12px system-ui, "Segoe UI", 
 </html>
 `)
 
+// Agent cho may khac (qua SSH): mot file .mjs tu chua, chi can Node >= 18 ben kia.
+const pkgVersion = JSON.parse(readFileSync(path.join(PLUGIN, 'orca-plugin.json'), 'utf8')).version
+await build({
+  entryPoints: { agent: path.join(HERE, 'src', 'agent.ts') },
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: 'node18',
+  outdir: path.join(PLUGIN, 'worker'),
+  outExtension: { '.js': '.mjs' },
+  define: { __AGENT_VERSION__: JSON.stringify(pkgVersion) },
+  logLevel: 'warning'
+})
+
 await build({
   entryPoints: { worker: path.join(HERE, 'src', 'worker.ts') },
   bundle: true,
