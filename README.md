@@ -29,13 +29,26 @@ trong trình soạn thảo thường của Orca.
 | clangd | C++ (LSP) | Có sẵn khi cài **Qt Creator** (`C:\Qt\Tools\QtCreator\bin\clang\bin`), hoặc LLVM |
 | `compile_commands.json` trong thư mục build | C++ (LSP) | CMake configure với `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (nút *Configure* của Qt Tools đã bật sẵn) |
 
+**Kiểm tra nhanh:** clone repo (hoặc tải file `setup/install-prereqs.ps1`) rồi chạy
+`powershell -ExecutionPolicy Bypass -File setup\install-prereqs.ps1`. Script kiểm tra Orca, git + quyền đọc repo, Node,
+tự cài basedpyright, và báo thiếu Qt/clangd.
+
 ### 2. Cài plugin
 
-1. Orca → **Settings → Plugins → Marketplaces → Add** → dán
-   `https://github.com/tungvu-vms/orca-qt-pack.git`, ref `main`.
-2. Trong marketplace "Qt Developer Pack (team)", cài các plugin cần dùng.
-3. Plugin `trusted-worker` (Qt Tools, Code Intelligence) sẽ hỏi duyệt quyền. Duyệt thì mới chạy.
-4. **Settings → Appearance → Icon theme** → *Qt Developer Icons* (hoặc bản Light).
+1. **Đăng nhập GitHub cho git trước.** Orca tải marketplace bằng `git` và **không hiện hộp đăng nhập**: chưa đăng nhập thì
+   catalog báo lỗi không đọc được repo. Cách nhanh: chạy một lần
+   `git ls-remote https://github.com/tungvu-vms/orca-qt-pack.git` trong terminal → Git Credential Manager mở trình duyệt
+   đăng nhập GitHub (tài khoản đã được mời vào repo).
+2. Orca → **Settings → Plugins → Catalog sources** → thêm Git URL
+   `https://github.com/tungvu-vms/orca-qt-pack.git`, Git ref `main`.
+   Hoặc bấm link (Orca hỏi thêm catalog rồi mở trang plugin):
+   `orca://plugins/tungvu-vms.qt-dev-python-lsp?catalog=https://github.com/tungvu-vms/orca-qt-pack.git`
+3. Trong catalog "Qt Developer Pack (team)", cài các plugin cần dùng.
+4. Plugin `trusted-worker` (Qt Tools, Code Intelligence) sẽ hỏi duyệt quyền. Duyệt thì mới chạy.
+5. **Settings → Appearance → Icon theme** → *Qt Developer Icons* (hoặc bản Light).
+
+Đã kiểm chứng 04/11/2026 trên máy Windows 11 sạch (VM `test-vm`): Orca 1.4.248 tải catalog private, cài đủ 4 plugin,
+2 plugin `trusted-worker` chạy sau khi duyệt.
 
 ### 3. Dùng
 
