@@ -1015,14 +1015,31 @@ function createCore(host) {
     const data = Array.isArray(r?.data) ? r.data : [];
     return { legend: srv.legend, data: data.length > 15e4 ? data.slice(0, 15e4) : data };
   });
-  handle("lsp.peek", async ({ path }) => {
+  handle("lsp.peek", async ({ path, line }) => {
     if (!langOfPath(path) && !/(^|[\\/])[A-Z][A-Za-z0-9]*$/.test(path)) return { text: "", lang: null };
     const lang = langOfPath(path) ?? "cpp";
+    const LIMIT = 3e5;
+    let text;
     try {
-      return { text: readFileSync2(path, "utf8").slice(0, 3e5), lang };
+      text = readFileSync2(path, "utf8");
     } catch {
       return { text: "", lang };
     }
+    if (text.length <= LIMIT) return { text, lang };
+    const lines = text.split("\n");
+    const at = Math.max(0, Math.min(lines.length - 1, line ?? 0));
+    let from = at, to = at, size = lines[at].length;
+    while (size < LIMIT - lines.length && (from > 0 || to < lines.length - 1)) {
+      if (to < lines.length - 1) {
+        to++;
+        size += lines[to].length + 1;
+      }
+      if (from > 0 && size < LIMIT - lines.length) {
+        from--;
+        size += lines[from].length + 1;
+      }
+    }
+    return { text: lines.map((l, i) => i >= from && i <= to ? l : "").join("\n"), lang, window: [from, to] };
   });
   handle("lsp.reveal", async ({ path, line }) => host.reveal ? host.reveal(path, line) : { opened: false, reason: "no-host" });
   return { handlers, workspaceRemoved, shutdown: () => {

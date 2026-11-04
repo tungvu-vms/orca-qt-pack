@@ -535,11 +535,23 @@ export function createCore(host: CoreEnv): Core {
   })
 
   /** Noi dung file dich (chi doc) cho peek / dieu huong. Chi file nguon/stub/header. */
-  handle('lsp.peek', async ({ path }: { path: string }) => {
+  handle('lsp.peek', async ({ path, line }: { path: string; line?: number }) => {
     if (!langOfPath(path) && !/(^|[\\/])[A-Z][A-Za-z0-9]*$/.test(path)) return { text: '', lang: null }
     const lang = langOfPath(path) ?? 'cpp'
-    // < 1 MiB sau khi ma hoa JSON (ky tu thuong ~1 byte, tieng Viet/ky tu dac biet co the 2-6): 300k ky tu cho an toan
-    try { return { text: readFileSync(path, 'utf8').slice(0, 300_000), lang } } catch { return { text: '', lang } }
+    // Tin < 1 MiB: file nho gui ca; file lon (vd. PySide6/QtCore.pyi 570 KB) gui mot cua so dong quanh `line`,
+    // cac dong ngoai cua so de trong (giu dung so dong de peek nhay dung cho).
+    const LIMIT = 300_000
+    let text: string
+    try { text = readFileSync(path, 'utf8') } catch { return { text: '', lang } }
+    if (text.length <= LIMIT) return { text, lang }
+    const lines = text.split('\n')
+    const at = Math.max(0, Math.min(lines.length - 1, line ?? 0))
+    let from = at, to = at, size = lines[at].length
+    while (size < LIMIT - lines.length && (from > 0 || to < lines.length - 1)) {
+      if (to < lines.length - 1) { to++; size += lines[to].length + 1 }
+      if (from > 0 && size < LIMIT - lines.length) { from--; size += lines[from].length + 1 }
+    }
+    return { text: lines.map((l, i) => (i >= from && i <= to ? l : '')).join('\n'), lang, window: [from, to] }
   })
 
   /** Mo dinh nghia trong tab Orca (file trong workspace); ngoai workspace thi editor hien peek. */

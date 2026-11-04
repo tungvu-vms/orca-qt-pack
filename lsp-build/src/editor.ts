@@ -404,10 +404,11 @@ async function main() {
         if (sameFile(loc.path, path)) { out.push({ uri: model.uri, range: toRange(loc.range) }); continue }
         // Monaco can mot model that cho moi dich den (ke ca khi minh tu mo tab Orca), neu khong se "Model not found".
         const scheme = loc.inWorkspace ? 'orca-ws' : 'orca-lib'
-        const uri = monaco.Uri.from({ scheme, path: '/' + loc.path.replace(/\\/g, '/') })
+        // File lon chi gui mot cua so dong: moi vung ~2000 dong mot model rieng (query w=) de nhay cho khac van co noi dung
+        const uri = monaco.Uri.from({ scheme, path: '/' + loc.path.replace(/\\/g, '/'), query: `w=${Math.floor(loc.range.start.line / 2000)}` })
         let target = monaco.editor.getModel(uri)
         if (!target) {
-          const r = await req<{ text?: string }>('lsp.peek', { path: loc.path }).catch(() => null)
+          const r = await req<{ text?: string }>('lsp.peek', { path: loc.path, line: loc.range.start.line }).catch(() => null)
           const peekLang = /\.pyi?$/i.test(loc.path) ? 'python' : /\.qml$/i.test(loc.path) ? 'qml' : 'cpp'
           target = monaco.editor.getModel(uri) ?? monaco.editor.createModel(r?.text ?? '', peekLang, uri)
           if (peekLang !== LANG) void installTextMate(peekLang as Lang)
