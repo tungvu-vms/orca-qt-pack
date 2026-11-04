@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-catalog.v2.schema.json",
   "catalogVersion": 2,
-  "name": "Qt Developer Pack (team)",
+  "name": "Qt Developer Pack",
   "owner": "tungvu-vms",
   "plugins": [
     {
@@ -52,9 +52,9 @@
       ],
       "releases": [
         {
-          "version": "0.4.2",
-          "commit": "b0e550bc6e1b7262561424eebcd9919cbb11b056",
-          "contentHash": "d2fb692c529be0c632e56cc2f8da9efccc9fa1b8dfbfd2184301aabd189f9a3a",
+          "version": "0.5.0",
+          "commit": "1c200e32d2cc855ccfb4302e1dda6acb75a69ba8",
+          "contentHash": "52361d1aa404b1deaffe20e65de50f767488d301de8116cdd2e5d463c8ff2843",
           "execution": "trusted-worker",
           "minimumOrca": "1.4.248",
           "name": "Qt Code Intelligence (Python, QML, C++)",
@@ -241,9 +241,9 @@
       ],
       "releases": [
         {
-          "version": "0.1.1",
-          "commit": "367294bac843c9c22c2d596df2b59662ed431634",
-          "contentHash": "6cf9a3f2de89c6a078808abe9ffac96eb2dd4834f50966e86c107fc53f63c2b2",
+          "version": "0.2.0",
+          "commit": "1c200e32d2cc855ccfb4302e1dda6acb75a69ba8",
+          "contentHash": "d087ce4e6392207c8734754f706a459caf6b9868d737f3fa10d64b673f6bc592",
           "execution": "trusted-worker",
           "minimumOrca": "1.4.248",
           "name": "Qt Developer Tools",
