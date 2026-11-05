@@ -3,6 +3,99 @@
 State as of 2026-11-05. Repo: `github.com/tungvu-vms/orca-qt-pack` (private, prepared for public).
 Read `README.md` first (install, settings, SSH, security). This file is the working memory behind it.
 
+## Development changes after the initial review (not published)
+
+- Python/PySide6 priority: references (Shift+F12), signature help, document symbols
+  (Ctrl+Shift+O), line navigation (Ctrl+G), semantic occurrences and local-only F2 rename.
+  `ide-providers.ts` registers Monaco providers; `protocol.ts` defines their contracts.
+- Rename returns edits to Monaco, never writes files. Reject cross-file changes/file
+  operations atomically; check LSP version and Monaco revision before applying.
+- References/definitions share a URI-to-target navigation map. Register
+  `standaloneReferenceSearch.js`: importing referencesController alone does not enable peek.
+- Monaco 0.52.2 leaves Delayer rejections unobserved when closing references peek.
+  `build.mjs` applies an explicit two-call cancellation patch with Monaco's own error
+  handler; it fails if the upstream source changes. No node_modules edits are required.
+- JSON byte budgets and surrogate-safe uploads live in `transport.ts`. Diagnostics,
+  new results, completion, semantic tokens and peek are bounded. Responses are converted
+  to pure JSON at the core boundary: Orca rejects properties whose value is undefined.
+- Disabled project environments also filter saved and PATH project interpreters;
+  workspace paths are excluded before version probes. SSH receives project-environment
+  and type-checking policy (host-specific executable paths are not forwarded).
+- Tests: `cd lsp-build; npm test; npm run typecheck; npm run test:ui; npm run check:build`.
+  Optional `QT_LSP_TEST_PYTHON` enables real PySide6 integration; `QT_LSP_BROWSER` selects
+  a browser. CI covers source checks and complete generated bundle parity.
+- Version remains 0.5.0. These changes are development-only; catalog publication needs
+  a release decision. Python formatting/Quick Fix, workspace rename and DAP debugging
+  remain separate follow-up work.
+- Review regressions now cover read-only peek editors, discarded buffers, actual
+  byte-window coverage in large targets, refreshed previews, stale rename results,
+  pending keystrokes during resync, and serialized SSH policy reloads. A full snapshot
+  consumes queued edits that are already incorporated, preventing duplicate text.
+- Quiet Python diagnostics: basedpyright 1.40 requests the root `basedpyright`
+  configuration section and then reads `.analysis`; answering only `.analysis`
+  sections silently left the server at `recommended`. Root sections now receive
+  nested analysis options. In `off`, surface syntax and missing imports only.
+  Boolean `pythonDiagnostics` controls all Python markers/diagnostic hover text;
+  F1 → Python: Toggle Diagnostics persists it, synchronizes open frames and leaves
+  completion/navigation enabled. The toggle does not restart SSH agents.
+- Large-file regression: a user's 2381-line / 138537-byte file exposed that the old
+  700k request budget used the result limit by mistake. Inputs now budget 48k bytes;
+  uploads use <=36k serialized-byte pieces, with surrogate boundaries preserved.
+  Initial large opens read disk. Initial/restart full syncs run on the incremental
+  edit queue; keystrokes arriving during initialization or upload are preserved.
+  Navigation retries `rate_limited` according to retryAfterMs within its deadline.
+  Run `npm run test:ui:large`; the harness enforces 64 KiB with structured-clone accounting.
+- Latency regression: concurrent initialization previously spawned six basedpyright
+  processes for the same VMS root, each scanning the workspace. `starting` shares one
+  in-flight startup per language/root; stopping a server invalidates its pending entry.
+  Python indexing defaults exclude build/dist/out, environments and `.worktrees`.
+  Hover/definition use request IDs and LSP cancellation when Monaco cancels; canceled
+  requests also stop retrying admission. Semantic refresh is scoped/debounced per file.
+  `dev/perf-worker.ps1 -Path <file> -Words @('symbol')` measures real worker round trips
+  including CLI overhead. Browser real-file mode uses QT_LSP_UI_FILE, QT_LSP_UI_ROOT,
+  QT_LSP_UI_SYMBOL and QT_LSP_TEST_PYTHON, reading source without writing it. Its Ctrl+Click
+  metric ends at the reveal callback, before actual Orca tab opening. On the VMS file,
+  measured first cold click ~7.5 s, subsequent clicks ~95 ms; do not claim instant cold startup.
+
+## Research follow-up: VS Code responsiveness (not implemented)
+
+The public VS Code/basedpyright client differs from the current plugin in several
+ways that should be measured before adding a custom project-wide index:
+
+1. **File-based cancellation and background analysis.** In basedpyright 1.40.2,
+   `server.ts:createBackgroundAnalysis` returns no background analyzer unless
+   `getCancellationFolderName()` is configured. The VS Code client passes
+   `--cancellationReceive=file:<unique-folder>` and writes per-request cancellation
+   files. This lets running synchronous analysis observe cancellation without
+   waiting to read a JSON-RPC notification. The plugin still launches with only
+   `--stdio`; its current `$/cancelRequest` support does not enable this worker.
+   Implement cancellation-file lifecycle on the language-server machine, including
+   SSH agents, then measure foreground responsiveness and memory before claiming a gain.
+2. **Incremental synchronization.** Editor-to-worker changes are incremental, but
+   worker-to-server `sendFull` still sends full document text. Consider LSP range
+   edits with CRLF/UTF-16 tests and full resync only for recovery.
+3. **Definition request reuse and preview loading.** Share matching in-flight
+   queries; any result cache must invalidate on relevant source/dependency changes.
+   `resolveLocations` currently waits for `lsp.peek` before opening a target. Separate
+   location lookup, preview loading and actual Orca CLI tab-open timings.
+4. **Indexing scope.** Pylance's symbol index mainly supports auto-imports and
+   workspace symbol search. Semantic navigation also needs the analyzer's import
+   graph and type results. Pylance documents a default limit of 2000 user *files*,
+   not lines, and persisted indices for third-party libraries, not user-file indices.
+   These Pylance-specific settings are not automatically supported by basedpyright.
+
+Use a representative cold/warm benchmark on the real VMS project. Record P50/P95
+for lookup, preview and tab-visible separately, including edits and dependency
+changes. A warm lookup P95 below 200 ms is a proposed target, not a measured guarantee.
+
+Primary sources checked:
+- [basedpyright 1.40.2 server background gate](https://github.com/DetachHead/basedpyright/blob/v1.40.2/packages/pyright-internal/src/server.ts#L33)
+- [basedpyright VS Code cancellation strategy](https://github.com/DetachHead/basedpyright/blob/v1.40.2/packages/vscode-pyright/src/cancellationUtils.ts#L69)
+- [VS Code definition-link behavior](https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/gotoSymbol/browser/link/goToDefinitionAtPosition.ts)
+- [Pyright analyzer architecture](https://github.com/microsoft/pyright/blob/main/docs/internals.md)
+- [Pylance indexing](https://github.com/microsoft/pylance-release/blob/main/docs/settings/python_analysis_indexing.md)
+- [Pylance index persistence](https://github.com/microsoft/pylance-release/blob/main/docs/settings/python_analysis_persistAllIndices.md)
+
 ## What it is
 
 `plugins/qt-lsp` = Orca plugin **Qt Code Intelligence** (`tungvu-vms.qt-dev-python-lsp`, v0.5.0).
@@ -24,7 +117,10 @@ Source lives in `lsp-build/src`, built into `plugins/qt-lsp` by `cd lsp-build &&
 - **Custom-editor frames never receive the file path** (Orca design). The worker finds the file by content:
   editor sends sha1(LF text) + UTF-8 size (LF and CRLF); worker indexes workspaces by **size only** (stat, BFS,
   skip build/venv/node_modules/Library/AppData…, stop at first hit) and hashes only same-size candidates.
-- **Frame ⇄ worker messages are capped (~1 MiB request, 256 KiB post).** Never send whole files: attach by hash,
+- **Frame inputs are capped at 64 KiB; worker results at 1 MiB; posts at 256 KiB.** The installed Orca's
+  `plugin-frame-bridge` confirms the input cap and a shared 120 requests / 10 seconds budget.
+  Account for structured-clone costs (8 bytes per number, array/object overhead), not JSON alone.
+  Never send whole files: attach by hash,
   open large files from disk, send incremental edits, chunk uploads, cap diagnostics/semantic tokens.
   `lsp.peek` sends a **line window** around the target for big stubs (PySide6 `QtCore.pyi` ≈ 570 KB).
 - **Never add files to `plugins/<name>/`** (node_modules, .d.ts…): Orca content-hashes the folder → "content hash
@@ -70,6 +166,5 @@ From the pre-publication review (all fixed in 0.5.0):
 2. Bundles `editor/assets/chunk-*.js` (2.2 MiB) and `editor.js` (1.3 MiB) exceed the 1 MiB soft warning; consider
    trimming Monaco contributions.
 3. Remote files: Ctrl+Click across hosts stays in peek (Orca cannot open a tab for another host's file via plugin).
-4. Lockfile is committed (`lsp-build/package-lock.json`); a CI build that checks committed bundles against source
-   would close the supply-chain gap noted in the review.
+4. Lockfile and CI bundle checks are present in the development checkout; run the workflow after publishing the branch.
 5. Before going public: decide commit author email (history still shows the company address).

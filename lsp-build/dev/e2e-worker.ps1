@@ -1,39 +1,58 @@
-# Tests the real LSP worker in Orca: open -> definition/hover/completion/diagnostics on samples/demo-app/main.py
-# Usage: pwsh lsp-build/dev/e2e-worker.ps1   (plugin loaded with `orca plugin dev`; output in %TEMP%\lsp-e2e.txt)
-$ErrorActionPreference = 'Continue'
-$repo = Resolve-Path "$PSScriptRoot\..\.."
+# Exercises the development worker through Orca's real frame bridge.
+# Usage: pwsh -File lsp-build/dev/e2e-worker.ps1 [-RequirePySide6]
+param([switch]$RequirePySide6)
+$ErrorActionPreference = 'Stop'
+$repo = (Resolve-Path "$PSScriptRoot\..\..").Path
 $key = 'local.qt-dev-python-lsp'
-$path = Join-Path $repo 'samples\demo-app\main.py'
-$out = "$env:TEMP\lsp-e2e.txt"
+$out = Join-Path $env:TEMP 'lsp-e2e.txt'
+$orcaCli = if ($env:ORCA_CLI_COMMAND) { $env:ORCA_CLI_COMMAND } else { 'orca' }
 '' | Set-Content $out
-function Req($name, $obj) {
-  $j = $obj | ConvertTo-Json -Compress -Depth 6
-  $r = orca plugin dev request $key $name --data $j --timeout-ms 60000 --json 2>$null | ConvertFrom-Json
-  if ($r.ok) { return $r.result.result } else { "ERR $name : $($r.error.message)" | Add-Content $out; return $null }
+function Assert-Check($condition, [string]$message) {
+  if (-not $condition) { throw $message }
+  "PASS $message" | Tee-Object -FilePath $out -Append | Write-Host
 }
-$text = [IO.File]::ReadAllText($path)
-Req 'lsp.attach' @{ language = 'python'; hash = (-join ([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($text.Replace("`r`n","`n"))) | % { $_.ToString('x2') })) } | Out-Null
-Req 'lsp.open' @{ path = $path; text = $text; version = 1 } | Out-Null
-Start-Sleep 3
-$lines = $text -split "`n"
-$cases = @(
-  @{ name = 'import make_title (L3)'; line = 2; word = 'make_title' },
-  @{ name = 'QApplication (L5)';      line = 4; word = 'QApplication' },
-  @{ name = 'make_title call (L7)';   line = 6; word = 'make_title' },
-  @{ name = 'APP_VERSION (L7)';       line = 6; word = 'APP_VERSION' },
-  @{ name = 'win variable (L7)';      line = 6; word = 'win' },
-  @{ name = 'sys module (L1)';        line = 0; word = 'sys' }
-)
-foreach ($c in $cases) {
-  $col = $lines[$c.line].IndexOf($c.word) + 1
-  $pos = @{ line = $c.line; character = $col }
-  $d = Req 'lsp.definition' @{ path = $path; position = $pos }
-  $h = Req 'lsp.hover' @{ path = $path; position = $pos }
-  $locs = (@($d.locations) | ? { $_.path } | % { "$((Split-Path $_.path -Leaf)):$($_.range.start.line + 1) ws=$($_.inWorkspace)" }) -join ' | '
-  $hv = (($h.markdown -split "`n") | ? { $_ -and $_ -notmatch '^```' } | select -First 1)
-  "{0,-26} def=[{1}] hover=[{2}]" -f $c.name, $locs, $hv | Add-Content $out
+function Req([string]$name, $obj) {
+  $j = ConvertTo-Json -InputObject $obj -Compress -Depth 12
+  $raw = & $orcaCli plugin dev request $key $name --data $j --timeout-ms 90000 --json
+  if ($LASTEXITCODE -ne 0) { throw "$name failed: $raw" }
+  $r = $raw | ConvertFrom-Json
+  if (-not $r.ok) { throw "$name failed: $($r.error.message)" }
+  return $r.result.result
 }
-$comp = Req 'lsp.completion' @{ path = $path; position = @{ line = 5; character = 10 } }
-"completion after 'win = QMa': $(@($comp.items).Count) items; first: $(($comp.items | select -First 5 | % label) -join ', ')" | Add-Content $out
-$diag = Req 'lsp.diagnostics' @{ path = $path }
-"diagnostics: $(@($diag.items).Count) -> $(($diag.items | select -First 3 | % { "L$($_.range.start.line+1) $($_.message)" }) -join ' || ')" | Add-Content $out
+function Attach-File([string]$file) {
+  $text = [IO.File]::ReadAllText($file)
+  $lf = $text.Replace("`r`n", "`n")
+  $bytes = [Text.Encoding]::UTF8.GetBytes($lf)
+  $sha = [Security.Cryptography.SHA1]::Create()
+  try { $hash = -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() }
+  $attached = Req 'lsp.attach' @{ language = 'python'; hash = $hash; size = $bytes.Length; sizeCrlf = $bytes.Length + ([regex]::Matches($lf, "`n")).Count }
+  Assert-Check ($attached.ok -and $attached.path) "Attach $([IO.Path]::GetFileName($file)) by hash and byte sizes"
+  Req 'lsp.open' @{ path = $attached.path; text = $text; version = 1 } | Out-Null
+  return @{ path = $attached.path; text = $text }
+}
+try {
+  $helper = Attach-File (Join-Path $repo 'samples/demo-app/helper.py')
+  $main = Attach-File (Join-Path $repo 'samples/demo-app/main.py')
+  $definition = Req 'lsp.definition' @{ path = $main.path; position = @{ line = 2; character = 20 } }
+  Assert-Check (@($definition.locations).Count -gt 0) 'F12 resolves the project import'
+  $hover = Req 'lsp.hover' @{ path = $helper.path; position = @{ line = 0; character = 6 } }
+  Assert-Check ([string]$hover.markdown -match 'make_title') 'Hover returns function information'
+  $references = Req 'lsp.references' @{ path = $helper.path; position = @{ line = 0; character = 6 }; includeDeclaration = $true }
+  Assert-Check (@($references.locations).Count -ge 2) 'References include the declaration and callers'
+  $signature = Req 'lsp.signatureHelp' @{ path = $main.path; position = @{ line = 6; character = 30 } }
+  Assert-Check (@($signature.signatures).Count -gt 0) 'Signature help resolves an imported function'
+  $symbols = Req 'lsp.documentSymbols' @{ path = $helper.path }
+  Assert-Check (@($symbols.items | Where-Object name -eq 'make_title').Count -eq 1) 'Document symbols contain the function'
+  $rename = Req 'lsp.rename' @{ path = $helper.path; position = @{ line = 0; character = 16 }; newName = 'display_name'; version = 1 }
+  Assert-Check (-not $rename.rejectReason -and @($rename.edits).Count -eq 2) 'F2 returns local parameter edits without writing disk'
+  $crossFile = Req 'lsp.rename' @{ path = $helper.path; position = @{ line = 0; character = 6 }; newName = 'new_title'; version = 1 }
+  Assert-Check ($crossFile.rejectReason -and @($crossFile.edits).Count -eq 0) 'Cross-file rename is rejected without partial edits'
+  if ($RequirePySide6) {
+    $qt = Req 'lsp.definition' @{ path = $main.path; position = @{ line = 4; character = 10 } }
+    Assert-Check (@($qt.locations | Where-Object { $_.path -match 'QtWidgets' }).Count -gt 0) 'PySide6 QApplication resolves in the selected interpreter'
+  }
+  "All worker checks passed. Report: $out" | Write-Host
+} catch {
+  "FAIL $($_.Exception.Message)" | Tee-Object -FilePath $out -Append | Write-Host
+  exit 1
+}

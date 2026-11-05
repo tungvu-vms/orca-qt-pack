@@ -82,6 +82,13 @@
         "default": "off"
       },
       {
+        "key": "pythonDiagnostics",
+        "title": "Show Python diagnostics",
+        "description": "Show Python error underlines and diagnostic messages. Turn off for a quiet editor while keeping completion, hover and navigation. Also available in the editor's F1 menu as Python: Toggle Diagnostics.",
+        "type": "boolean",
+        "default": true
+      },
+      {
         "key": "projectEnvironments",
         "title": "Use project environments",
         "description": "on (default): pick the project's own venv / conda env, .vscode/settings.json and pyrightconfig like VS Code. Pyright then runs that environment's python to read its library paths, so only open projects you trust. off: use installed Pythons only.",

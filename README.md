@@ -53,6 +53,38 @@ Orca checks the catalog for updates by itself; Settings → Plugins → ↻ chec
     the definition line. Files outside every workspace (the Python standard library, typeshed) and files on another
     machine open in a peek view.
 
+### Python / PySide6 editing (development checkout)
+
+The development editor adds the following interactions. These changes have not yet
+been published to the catalog; load this checkout with `orca plugin dev load plugins/qt-lsp`.
+
+| Action | Windows / Linux | macOS |
+| --- | --- | --- |
+| Go to definition | F12 / Ctrl+Click | F12 / Cmd+Click |
+| Find references, including other project files | Shift+F12 | Shift+F12 |
+| Find a function, class or method in the file | Ctrl+Shift+O | Cmd+Shift+O |
+| Go to a line and column | Ctrl+G | Ctrl+G |
+| Show function parameters | Ctrl+Shift+Space; also while typing `(` or `,` | Cmd+Shift+Space |
+| Rename a symbol within the current file | F2 | F2 |
+| Undo a rename | Ctrl+Z | Cmd+Z |
+| Editor command palette | F1 | F1 |
+| Next / previous problem | F8 / Shift+F8 | F8 / Shift+F8 |
+
+References appear in a peek with a file list and code preview. Open a project result
+at its line; library and SSH results remain in the peek. Escape closes the peek.
+The current symbol's occurrences are highlighted. Completion preserves snippets and
+the extra import edits provided by the server. Navigation and rename use unsaved text.
+
+F2 applies changes through the editor, with undo. A rename that also needs other
+files is refused in full with a message; no partial edits are applied. Workspace
+rename, formatting/Quick Fix and breakpoint debugging remain future work.
+
+For PySide6 types to resolve, select the Python environment **that has PySide6
+installed**, using the interpreter button at the bottom of the editor. An environment
+under the project (for example `.venv`) is detected automatically when *Use project
+environments* is on. An installed Python without PySide6 cannot resolve Qt classes.
+Use the project's normal dependency installation process to populate its environment.
+
 ## Settings
 
 **Qt Developer Tools:** Qt bin folder, Python binding (PySide6/PyQt6/PyQt5/C++), Python interpreter, format QML on save,
@@ -67,6 +99,11 @@ version) → the highest installed Python.
 
 **Type checking** is `off` by default, like VS Code's Pylance: only syntax errors and unresolved imports. Set
 *Python type checking* to `basic`, `standard` or `strict` for more.
+
+To hide all Python squiggles and diagnostic text in hovers, press **F1** inside
+**Python (LSP)** and choose **Python: Toggle Diagnostics**, or turn off **Show Python
+diagnostics** in the plugin's settings. This preference is saved and applies to open
+Python editors immediately. Completion, type/documentation hovers and F12 keep working.
 
 ## Code on another machine (SSH)
 
@@ -124,6 +161,26 @@ node tools/tokenize-check.mjs plugins/qt-syntax samples/*
 cd lsp-build && npm ci && node build.mjs
 orca plugin dev load plugins/qt-lsp
 ```
+
+From `lsp-build`, run `npm test` for real basedpyright integration and regression tests,
+`npm run typecheck` for all editor/worker/agent sources, and `npm run test:ui` for
+keyboard tests of the built Monaco editor in an installed Edge/Chrome/Chromium.
+Set `QT_LSP_BROWSER` to the browser executable when it is not in a standard location.
+`npm run test:ui:large` additionally checks a 2,400-line file, repeated Ctrl+Click,
+the real 64 KiB request limit, edits during initialization/uploads, large Unicode
+pastes and recovery from transient request throttling.
+For latency investigations, `lsp-build/dev/perf-worker.ps1 -Path <python-file>
+-Words @('symbol')` measures real worker definition/hover requests, including CLI
+overhead. The first query in a large PySide6 project can take several seconds while
+the server loads imports; subsequent queries reuse that server.
+Set `QT_LSP_TEST_PYTHON` to a trusted interpreter containing PySide6 to also test Qt
+stubs, signatures and completion; otherwise that one integration check is skipped.
+The browser harness simulates Orca's document bridge and uses the actual built editor
+and real language server. `lsp-build/dev/e2e-worker.ps1` separately asserts the bridge
+against a running Orca and exits with an error when a check fails.
+
+`npm run check:build` rebuilds in place and verifies every plugin file's bytes and the
+complete file list. CI uses the lockfile and Node 24.19.0 to run these checks.
 
 - **Never put anything else in `plugins/<name>/`** (`node_modules`, `.d.ts`…). Orca hashes the whole folder; extra files
   after approval stop the worker ("content hash mismatch"). Orca's typings live in `types/orca/`.

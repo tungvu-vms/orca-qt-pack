@@ -3,7 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node dev/test.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test:ui": "node dev/ui-e2e.mjs",
+    "test:ui:large": "node dev/ui-e2e.mjs --large",
+    "check:build": "node dev/check-build.mjs"
   },
   "dependencies": {
     "monaco-editor": "0.52.2",
@@ -11,8 +16,11 @@
     "vscode-textmate": "^9.2.0"
   },
   "devDependencies": {
+    "@types/node": "22.9.0",
     "basedpyright": "^1.40.2",
     "esbuild": "0.28.2",
-    "pyright": "1.1.414"
+    "playwright-core": "1.58.2",
+    "pyright": "1.1.414",
+    "typescript": "5.6.3"
   }
 }

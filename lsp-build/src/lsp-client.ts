@@ -7,7 +7,7 @@ export class LspClient {
   private proc: ChildProcess
   private buf = Buffer.alloc(0)
   private nextId = 0
-  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>()
+  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; cleanup: () => void }>()
   private notifyHandlers = new Map<string, Handler>()
   private requestHandlers = new Map<string, Handler>()
   exited = false
@@ -20,7 +20,7 @@ export class LspClient {
     this.proc.stderr!.on('data', (d: Buffer) => this.log(`[stderr] ${d.toString().trim().slice(0, 500)}`))
     this.proc.on('exit', (code) => {
       this.exited = true
-      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('language server exited')) }
+      for (const p of this.pending.values()) { p.cleanup(); p.reject(new Error('language server exited')) }
       this.pending.clear()
       this.onExit?.(code)
     })
@@ -30,16 +30,27 @@ export class LspClient {
   onNotification(method: string, h: Handler) { this.notifyHandlers.set(method, h) }
   onRequest(method: string, h: Handler) { this.requestHandlers.set(method, h) }
 
-  request<T = any>(method: string, params: unknown, timeoutMs = 15000): Promise<T> {
+  request<T = any>(method: string, params: unknown, timeoutMs = 15000, signal?: AbortSignal): Promise<T> {
     if (this.exited) return Promise.reject(new Error('language server exited'))
+    const aborted = () => Object.assign(new Error('Request cancelled'), { name: 'AbortError' })
+    if (signal?.aborted) return Promise.reject(aborted())
     const id = ++this.nextId
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
+        cleanup()
         this.notify('$/cancelRequest', { id })
         reject(new Error(`${method} timed out`))
       }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timer })
+      const cancel = () => {
+        if (!this.pending.delete(id)) return
+        cleanup()
+        this.notify('$/cancelRequest', { id })
+        reject(aborted())
+      }
+      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel) }
+      this.pending.set(id, { resolve, reject, cleanup })
+      signal?.addEventListener('abort', cancel, { once: true })
       this.write({ jsonrpc: '2.0', id, method, params })
     })
   }
@@ -77,7 +88,7 @@ export class LspClient {
       const p = this.pending.get(msg.id)
       if (!p) return
       this.pending.delete(msg.id)
-      clearTimeout(p.timer)
+      p.cleanup()
       if (msg.error) p.reject(new Error(msg.error.message ?? 'LSP error'))
       else p.resolve(msg.result)
       return

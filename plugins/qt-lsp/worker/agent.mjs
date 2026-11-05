@@ -32,7 +32,7 @@ var LspClient = class {
     this.proc.on("exit", (code) => {
       this.exited = true;
       for (const p of this.pending.values()) {
-        clearTimeout(p.timer);
+        p.cleanup();
         p.reject(new Error("language server exited"));
       }
       this.pending.clear();
@@ -46,16 +46,30 @@ var LspClient = class {
   onRequest(method, h) {
     this.requestHandlers.set(method, h);
   }
-  request(method, params, timeoutMs = 15e3) {
+  request(method, params, timeoutMs = 15e3, signal) {
     if (this.exited) return Promise.reject(new Error("language server exited"));
+    const aborted = () => Object.assign(new Error("Request cancelled"), { name: "AbortError" });
+    if (signal?.aborted) return Promise.reject(aborted());
     const id = ++this.nextId;
     return new Promise((resolve4, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        cleanup();
         this.notify("$/cancelRequest", { id });
         reject(new Error(`${method} timed out`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve4, reject, timer });
+      const cancel = () => {
+        if (!this.pending.delete(id)) return;
+        cleanup();
+        this.notify("$/cancelRequest", { id });
+        reject(aborted());
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", cancel);
+      };
+      this.pending.set(id, { resolve: resolve4, reject, cleanup });
+      signal?.addEventListener("abort", cancel, { once: true });
       this.write({ jsonrpc: "2.0", id, method, params });
     });
   }
@@ -102,7 +116,7 @@ ${s}`);
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
-      clearTimeout(p.timer);
+      p.cleanup();
       if (msg.error) p.reject(new Error(msg.error.message ?? "LSP error"));
       else p.resolve(msg.result);
       return;
@@ -166,7 +180,7 @@ function installPyright(prefix, node, log2) {
 
 // src/interpreters.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync2, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync as existsSync2, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname as dirname2, isAbsolute, join as join2, resolve, sep } from "node:path";
 var WIN = process.platform === "win32";
 var lower = (p) => WIN ? p.toLowerCase() : p;
@@ -337,6 +351,16 @@ function discoverInterpreters(file, root, opts = {}) {
   const project = projectRootFor(file, root);
   const list = [];
   const seen = /* @__PURE__ */ new Set();
+  const insideRoot = (p) => {
+    const r = lower(resolve(root)), abs = lower(resolve(p));
+    if (abs === r || abs.startsWith(r + sep)) return true;
+    try {
+      const realRoot = lower(realpathSync(root)), real = lower(realpathSync(p));
+      return real === realRoot || real.startsWith(realRoot + sep);
+    } catch {
+      return false;
+    }
+  };
   const make = (path, source, reason) => {
     const key2 = lower(resolve(path));
     if (seen.has(key2) || !existsSync2(path)) return null;
@@ -344,7 +368,8 @@ function discoverInterpreters(file, root, opts = {}) {
     const envDir = dirname2(dirname2(path));
     const isVenv = isEnvDir(envDir) || isEnvDir(dirname2(path));
     const dir = isEnvDir(envDir) ? envDir : isEnvDir(dirname2(path)) ? dirname2(path) : null;
-    const inProject = lower(resolve(path)).startsWith(lower(resolve(root)) + sep);
+    if (!useProject && (dir || insideRoot(path))) return null;
+    const inProject = insideRoot(path);
     const version = dir && venvVersion(dir) || (inProject ? null : runVersion(path));
     const name = dir ? lower(dir).startsWith(lower(project) + (WIN ? "\\" : "/")) ? dir.slice(project.length + 1).replace(/\\/g, "/") : basename(dir) : `Python ${version ?? ""}`.trim();
     return { path: resolve(path), label: isVenv ? `${name}${version ? ` (${version})` : ""}` : `${name} (global)`, version, source, envDir: dir, reason };
@@ -372,7 +397,7 @@ function discoverInterpreters(file, root, opts = {}) {
   }
   const active = process.env.VIRTUAL_ENV;
   if (useProject && active && lower(resolve(active)).startsWith(lower(project))) add(envExe(active), "env", "active VIRTUAL_ENV");
-  const globals = globalCandidates().map((p) => ({ p, v: runVersion(p) })).filter((x) => x.v).sort((a, b) => cmpVersionDesc(a.v, b.v));
+  const globals = globalCandidates().filter((p) => !insideRoot(p) && !envDirOf(p)).map((p) => ({ p, v: runVersion(p) })).filter((x) => x.v).sort((a, b) => cmpVersionDesc(a.v, b.v));
   for (const g of globals) add(g.p, "global", "no venv: using the highest installed Python");
   return list;
 }
@@ -531,6 +556,34 @@ function projectRootFor2(lang, file, limit) {
   return resolve2(limit);
 }
 
+// src/transport.ts
+var RESPONSE_BUDGET = 7e5;
+var POST_BUDGET = 22e4;
+var encoder = new TextEncoder();
+var jsonBytes = (value) => encoder.encode(JSON.stringify(value)).length;
+function messageBytes(value) {
+  let objects = 0;
+  const visit = (v, depth) => {
+    if (depth > 90) return Infinity;
+    if (v == null || typeof v === "boolean") return 1;
+    if (typeof v === "number") return 8;
+    if (typeof v === "string") return encoder.encode(v).length;
+    if (++objects > 9e3) return Infinity;
+    if (Array.isArray(v)) return 8 + v.reduce((sum, item) => sum + 4 + visit(item, depth + 1), 0);
+    return Object.entries(v).reduce((sum, [key2, item]) => sum + 4 + encoder.encode(key2).length + visit(item, depth + 1), 0);
+  };
+  return Math.max(jsonBytes(value), visit(value, 0));
+}
+function limitItems(items, envelope, budget = RESPONSE_BUDGET) {
+  let count = 0, high = items.length;
+  while (count < high) {
+    const middle = Math.ceil((count + high) / 2);
+    if (messageBytes(envelope(items.slice(0, middle))) <= budget) count = middle;
+    else high = middle - 1;
+  }
+  return items.slice(0, count);
+}
+
 // src/core.ts
 var SKIP2 = /* @__PURE__ */ new Set([
   "node_modules",
@@ -565,9 +618,10 @@ var langOfPath = (p) => EXTS_OF_LANG.python.test(p) ? "python" : EXTS_OF_LANG.qm
 function createCore(host) {
   const handlers = {};
   const handle = (name, fn) => {
-    handlers[name] = fn;
+    handlers[name] = async (input) => JSON.parse(JSON.stringify(await fn(input) ?? null));
   };
   const servers = /* @__PURE__ */ new Map();
+  const starting = /* @__PURE__ */ new Map();
   const hashIndex = /* @__PURE__ */ new Map();
   async function setting(k, fallback) {
     try {
@@ -717,12 +771,27 @@ function createCore(host) {
   }
   async function serverFor(lang, root, file) {
     const existing = servers.get(key(lang, root));
-    if (existing && !existing.client.exited) return existing;
+    if (existing && !existing.client.exited) {
+      await existing.ready;
+      return existing;
+    }
+    const id = key(lang, root);
+    const pending = starting.get(id);
+    if (pending) return pending;
+    const startup = startServer(lang, root, file);
+    starting.set(id, startup);
+    try {
+      return await startup;
+    } finally {
+      if (starting.get(id) === startup) starting.delete(id);
+    }
+  }
+  async function startServer(lang, root, file) {
     const { cmd, args, env, detail } = await commandFor(lang, root);
     host.log(`spawn ${lang}: ${cmd} ${args.join(" ")} (root ${root})`);
     const client = new LspClient(cmd, args, lang === "python" ? pluginDir() : root, env);
     client.log = (l) => host.log(`[${lang}] ${l}`);
-    const srv = { lang, root, client, ready: Promise.resolve(), open: /* @__PURE__ */ new Map(), diagnostics: /* @__PURE__ */ new Map(), legend: null, interpreter: null, detail };
+    const srv = { lang, root, client, ready: Promise.resolve(), open: /* @__PURE__ */ new Map(), diagnostics: /* @__PURE__ */ new Map(), legend: null, interpreter: null, detail, capabilities: {} };
     client.onExit = (code) => {
       host.log(`${lang} server exited (${code}) for ${root}`);
       if (servers.get(key(lang, root)) === srv) servers.delete(key(lang, root));
@@ -735,10 +804,21 @@ function createCore(host) {
     client.onRequest("workspace/configuration", (params) => params.items.map((it) => {
       if (lang !== "python") return {};
       const py = srv.interpreter?.path;
-      if (it.section === "python") return py ? { pythonPath: py, defaultInterpreterPath: py } : {};
-      if (it.section === "python.analysis" || it.section === "basedpyright.analysis") {
-        return { typeCheckingMode: typeMode, diagnosticMode: "openFilesOnly", autoSearchPaths: true, useLibraryCodeForTypes: true, autoImportCompletions: true };
-      }
+      const analysis = {
+        typeCheckingMode: typeMode,
+        diagnosticMode: "openFilesOnly",
+        autoSearchPaths: true,
+        useLibraryCodeForTypes: true,
+        autoImportCompletions: true,
+        // Large Qt/Python repositories often keep packaged apps and additional
+        // checkouts here. Explicit imports still resolve; avoid enumerating them
+        // for workspace indexing before an interactive request can be answered.
+        exclude: ["**/node_modules/**", "**/__pycache__/**", "**/.git/**", "**/.worktrees/**", "**/.venv/**", "**/venv/**", "**/build/**", "**/dist/**", "**/out/**"],
+        ...typeMode === "off" ? { diagnosticSeverityOverrides: { reportMissingImports: "error" } } : {}
+      };
+      if (it.section === "python") return { ...py ? { pythonPath: py, defaultInterpreterPath: py } : {}, analysis };
+      if (it.section === "basedpyright" || it.section === "pyright") return { analysis };
+      if (it.section === "python.analysis" || it.section === "basedpyright.analysis") return analysis;
       return {};
     }));
     client.onRequest("window/workDoneProgress/create", () => null);
@@ -758,10 +838,14 @@ function createCore(host) {
       }
       const out2 = {
         version: p.version ?? -1,
-        items: p.diagnostics.map((d) => ({ range: d.range, severity: d.severity ?? 1, message: d.message, source: d.source ?? SERVER_LABEL[lang], code: typeof d.code === "object" ? d.code?.value : d.code }))
+        items: p.diagnostics.filter((d) => {
+          const code = typeof d.code === "object" ? d.code?.value : d.code;
+          return lang !== "python" || typeMode !== "off" || code == null || code === "reportMissingImports";
+        }).map((d) => ({ range: d.range, severity: d.severity ?? 1, message: d.message, source: d.source ?? SERVER_LABEL[lang], code: typeof d.code === "object" ? d.code?.value : d.code }))
       };
       srv.diagnostics.set(norm(path), out2);
-      host.post("lsp.diagnostics", { path, version: out2.version, items: out2.items.slice(0, 300).map((d) => ({ ...d, message: String(d.message).slice(0, 500) })) });
+      const envelope = (items) => ({ path, version: out2.version, items });
+      host.post("lsp.diagnostics", JSON.parse(JSON.stringify(envelope(limitItems(out2.items.slice(0, 300).map((d) => ({ ...d, message: String(d.message).slice(0, 500) })), envelope, POST_BUDGET)))));
     });
     const rootUri = pathToFileURL(root).href;
     srv.ready = client.request("initialize", {
@@ -776,7 +860,12 @@ function createCore(host) {
           definition: { linkSupport: false },
           declaration: { linkSupport: false },
           hover: { contentFormat: ["markdown", "plaintext"] },
-          completion: { completionItem: { snippetSupport: false, documentationFormat: ["markdown", "plaintext"] }, contextSupport: true },
+          completion: { completionItem: { snippetSupport: true, documentationFormat: ["markdown", "plaintext"] }, contextSupport: true },
+          references: {},
+          signatureHelp: { signatureInformation: { documentationFormat: ["markdown", "plaintext"], parameterInformation: { labelOffsetSupport: true }, activeParameterSupport: true }, contextSupport: true },
+          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+          documentHighlight: {},
+          rename: { prepareSupport: true },
           publishDiagnostics: { versionSupport: true },
           semanticTokens: { requests: { full: true, range: false }, tokenTypes: [], tokenModifiers: [], formats: ["relative"], multilineTokenSupport: false, overlappingTokenSupport: false }
         },
@@ -784,13 +873,20 @@ function createCore(host) {
       },
       initializationOptions: lang === "cpp" ? { clangdFileStatus: false } : {}
     }, 6e4).then((init) => {
+      srv.capabilities = init?.capabilities ?? {};
       const legend = init?.capabilities?.semanticTokensProvider?.legend;
       if (legend?.tokenTypes) srv.legend = { tokenTypes: legend.tokenTypes, tokenModifiers: legend.tokenModifiers ?? [] };
       client.notify("initialized", {});
       if (lang === "python") client.notify("workspace/didChangeConfiguration", { settings: {} });
     });
     servers.set(key(lang, root), srv);
-    await srv.ready;
+    try {
+      await srv.ready;
+    } catch (e) {
+      if (servers.get(key(lang, root)) === srv) servers.delete(key(lang, root));
+      srv.client.kill();
+      throw e;
+    }
     host.log(`${lang} ready for ${root} (${detail})`);
     return srv;
   }
@@ -933,6 +1029,8 @@ function createCore(host) {
     return { ok: true };
   });
   handle("lsp.close", async ({ path }) => {
+    docs.delete(norm(path));
+    uploads.delete(norm(path));
     const lang = langOfPath(path);
     const srv = lang ? serverOf(lang, path) : null;
     if (srv?.open.delete(norm(path))) srv.client.notify("textDocument/didClose", { textDocument: { uri: uriOf(path) } });
@@ -942,6 +1040,7 @@ function createCore(host) {
     return { ok: true };
   });
   function stopServer(srv) {
+    starting.delete(key(srv.lang, srv.root));
     servers.delete(key(srv.lang, srv.root));
     hashIndex.delete(srv.root);
     void srv.client.request("shutdown", null, 3e3).catch(() => {
@@ -955,34 +1054,151 @@ function createCore(host) {
   };
   const LIB_RE = /[\\/](site-packages|\.venv|venv|env|node_modules|typeshed-fallback|include|Qt[\\/]\d|mingw\d*_64|qml[\\/]Qt|QtQuick)[\\/]/i;
   const isLibPath = (p, root) => !norm(p).startsWith(norm(root) + sep2) || LIB_RE.test(p.slice(root.length)) || /[\\/](build|out|cmake-build-[^\\/]*)[\\/]/i.test(p.slice(root.length));
-  handle("lsp.hover", async ({ path, position }) => {
+  const interactiveRequests = /* @__PURE__ */ new Map();
+  async function interactive(input, run) {
+    const controller = new AbortController();
+    const id = input.requestId ? `${norm(input.path)}|${input.requestId}` : null;
+    if (id) interactiveRequests.set(id, controller);
+    try {
+      return await run(controller.signal);
+    } finally {
+      if (id && interactiveRequests.get(id) === controller) interactiveRequests.delete(id);
+    }
+  }
+  handle("lsp.cancel", async ({ path, requestId }) => {
+    interactiveRequests.get(`${norm(path)}|${requestId}`)?.abort();
+    return { ok: true };
+  });
+  handle("lsp.hover", (input) => interactive(input, async (signal) => {
+    const { path, position } = input;
     const srv = await serverForPath(path);
-    const r = await srv.client.request("textDocument/hover", { textDocument: { uri: uriOf(path) }, position });
+    const r = await srv.client.request("textDocument/hover", { textDocument: { uri: uriOf(path) }, position }, 15e3, signal);
     if (!r) return { markdown: null, range: null };
     const c = r.contents;
     const md = typeof c === "string" ? c : Array.isArray(c) ? c.map((x) => typeof x === "string" ? x : "```" + (x.language ?? "") + "\n" + x.value + "\n```").join("\n\n") : c?.kind === "plaintext" ? "```\n" + c.value + "\n```" : c?.value ?? null;
     return JSON.parse(JSON.stringify({ markdown: md ?? null, range: r.range ?? null }));
-  });
+  }));
   const peekable = /* @__PURE__ */ new Set();
-  handle("lsp.definition", async ({ path, position }) => {
-    const srv = await serverForPath(path);
-    let r = await srv.client.request("textDocument/definition", { textDocument: { uri: uriOf(path) }, position });
-    if ((!r || Array.isArray(r) && !r.length) && srv.lang === "cpp") r = await srv.client.request("textDocument/declaration", { textDocument: { uri: uriOf(path) }, position }).catch(() => null);
-    const list = r ? Array.isArray(r) ? r : [r] : [];
+  async function locationsOf(list, srv) {
     const wsRoots = [...(await host.roots().catch(() => ({ roots: [] }))).roots, srv.root].map((x) => resolve3(x));
     const locations = [];
     for (const l of list) {
-      const u = l.uri ?? l.targetUri;
       let p;
       try {
-        p = fileURLToPath(u);
+        p = fileURLToPath(l.uri ?? l.targetUri);
       } catch {
         continue;
       }
+      const range = l.targetSelectionRange ?? l.range ?? l.targetRange;
+      if (!range?.start || !range?.end) continue;
       peekable.add(norm(p));
-      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r2) => norm(p).startsWith(norm(r2) + sep2)) });
+      locations.push({ path: p, range, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r) => norm(p).startsWith(norm(r) + sep2)) });
     }
+    return limitItems(locations, (locations2) => ({ locations: locations2, truncated: true }));
+  }
+  handle("lsp.definition", (input) => interactive(input, async (signal) => {
+    const { path, position } = input;
+    const srv = await serverForPath(path);
+    let r = await srv.client.request("textDocument/definition", { textDocument: { uri: uriOf(path) }, position }, 15e3, signal);
+    if ((!r || Array.isArray(r) && !r.length) && srv.lang === "cpp") r = await srv.client.request("textDocument/declaration", { textDocument: { uri: uriOf(path) }, position }).catch(() => null);
+    const list = r ? Array.isArray(r) ? r : [r] : [];
+    const locations = await locationsOf(list, srv);
     return JSON.parse(JSON.stringify({ locations }));
+  }));
+  handle("lsp.references", async ({ path, position, includeDeclaration = true }) => {
+    const srv = await serverForPath(path);
+    if (!srv.capabilities.referencesProvider) return { locations: [] };
+    const r = await srv.client.request("textDocument/references", { textDocument: { uri: uriOf(path) }, position, context: { includeDeclaration } });
+    const locations = await locationsOf(r ?? [], srv);
+    return { locations, truncated: locations.length < (r?.length ?? 0) };
+  });
+  const markdown = (v) => (typeof v === "string" ? v : v?.value)?.slice(0, 8e3);
+  handle("lsp.signatureHelp", async ({ path, position, trigger }) => {
+    const srv = await serverForPath(path);
+    const empty = { signatures: [], activeSignature: 0, activeParameter: 0 };
+    if (!srv.capabilities.signatureHelpProvider) return empty;
+    const r = await srv.client.request("textDocument/signatureHelp", {
+      textDocument: { uri: uriOf(path) },
+      position,
+      context: { triggerKind: trigger ? 2 : 1, triggerCharacter: trigger, isRetrigger: false }
+    });
+    if (!r) return empty;
+    const signatures = (r.signatures ?? []).slice(0, 50).map((s) => ({
+      label: String(s.label).slice(0, 16e3),
+      documentation: markdown(s.documentation),
+      activeParameter: s.activeParameter,
+      parameters: (s.parameters ?? []).map((p) => ({ label: p.label, documentation: markdown(p.documentation) }))
+    }));
+    return { ...empty, signatures: limitItems(signatures, (signatures2) => ({ ...empty, signatures: signatures2 })), activeSignature: r.activeSignature ?? 0, activeParameter: r.activeParameter ?? 0 };
+  });
+  handle("lsp.documentSymbols", async ({ path }) => {
+    const srv = await serverForPath(path);
+    if (!srv.capabilities.documentSymbolProvider) return { items: [] };
+    const raw = await srv.client.request("textDocument/documentSymbol", { textDocument: { uri: uriOf(path) } });
+    const items = [];
+    const visit = (list, parent = "", depth = 0) => {
+      if (depth > 100) return;
+      for (const s of list) {
+        if (items.length >= 1e4) return;
+        const range = s.range ?? s.location?.range;
+        if (!range) continue;
+        items.push({ name: String(s.name), detail: s.detail ?? "", kind: s.kind, range, selectionRange: s.selectionRange ?? range, containerName: s.containerName ?? parent, tags: s.tags });
+        if (s.children) visit(s.children, s.name, depth + 1);
+      }
+    };
+    visit(raw ?? []);
+    const capped = limitItems(items, (items2) => ({ items: items2, truncated: true }));
+    return { items: capped, truncated: capped.length < items.length };
+  });
+  handle("lsp.documentHighlights", async ({ path, position }) => {
+    const srv = await serverForPath(path);
+    if (!srv.capabilities.documentHighlightProvider) return { items: [] };
+    const r = await srv.client.request("textDocument/documentHighlight", { textDocument: { uri: uriOf(path) }, position });
+    return { items: limitItems((r ?? []).map((h) => ({ range: h.range, kind: h.kind ?? 1 })), (items) => ({ items })) };
+  });
+  handle("lsp.prepareRename", async ({ path, position }) => {
+    const srv = await serverForPath(path);
+    if (!srv.capabilities.renameProvider) return { rejectReason: "This language server does not support rename." };
+    if (!srv.capabilities.renameProvider.prepareProvider) return {};
+    const r = await srv.client.request("textDocument/prepareRename", { textDocument: { uri: uriOf(path) }, position });
+    if (!r) return { rejectReason: "This symbol cannot be renamed." };
+    if (r.defaultBehavior) return {};
+    const range = r.range ?? r;
+    const line = docs.get(norm(path))?.split(/\r?\n/)[range.start.line];
+    return { range, placeholder: r.placeholder ?? (range.start.line === range.end.line ? line?.slice(range.start.character, range.end.character) : void 0) };
+  });
+  handle("lsp.rename", async ({ path, position, newName, version }) => {
+    const srv = await serverForPath(path);
+    const reject = (rejectReason) => ({ edits: [], rejectReason });
+    if (!srv.capabilities.renameProvider) return reject("This language server does not support rename.");
+    if (!newName?.trim()) return reject("Enter a non-empty name.");
+    if (srv.open.get(norm(path)) !== version) return reject("The document changed. Try rename again.");
+    const r = await srv.client.request("textDocument/rename", { textDocument: { uri: uriOf(path) }, position, newName });
+    if (srv.open.get(norm(path)) !== version) return reject("The document changed. Try rename again.");
+    if (!r) return reject("This symbol cannot be renamed.");
+    const edits = [];
+    const add = (uri, changes) => {
+      let target;
+      try {
+        target = fileURLToPath(uri);
+      } catch {
+        return false;
+      }
+      if (norm(resolve3(target)) !== norm(resolve3(path))) return false;
+      for (const e of changes) {
+        if (!e.range || typeof e.newText !== "string") return false;
+        edits.push({ range: e.range, text: e.newText });
+      }
+      return true;
+    };
+    for (const [uri, changes] of Object.entries(r.changes ?? {})) if (!add(uri, changes)) return reject("Rename also changes other files. Cross-file rename is not available yet; no changes were applied.");
+    for (const change of r.documentChanges ?? []) {
+      if (!change.textDocument || !Array.isArray(change.edits)) return reject("Rename requires file operations; no changes were applied.");
+      if (change.textDocument.version != null && change.textDocument.version !== version) return reject("The document changed. Try rename again.");
+      if (!add(change.textDocument.uri, change.edits)) return reject("Rename also changes other files. Cross-file rename is not available yet; no changes were applied.");
+    }
+    if (messageBytes({ edits }) > RESPONSE_BUDGET) return reject("This rename is too large; no changes were applied.");
+    return { edits };
   });
   handle("lsp.completion", async ({ path, position, trigger }) => {
     const srv = await serverForPath(path);
@@ -998,15 +1214,20 @@ function createCore(host) {
       if (it.textEdit?.range ?? it.textEdit?.replace) out2.range = it.textEdit.range ?? it.textEdit.replace;
       if (it.sortText) out2.sortText = String(it.sortText);
       if (it.filterText) out2.filterText = String(it.filterText);
+      if (it.insertTextFormat === 2) out2.snippet = true;
+      if (it.additionalTextEdits?.length) out2.additionalTextEdits = it.additionalTextEdits.map((e) => ({ range: e.range, text: e.newText }));
       return out2;
     });
-    return JSON.parse(JSON.stringify({ items, incomplete: Array.isArray(r) ? false : !!r?.isIncomplete }));
+    const capped = limitItems(items, (items2) => ({ items: items2, incomplete: true }));
+    return JSON.parse(JSON.stringify({ items: capped, incomplete: capped.length < items.length || (Array.isArray(r) ? false : !!r?.isIncomplete) }));
   });
   handle("lsp.diagnostics", async ({ path }) => {
     const lang = langOfPath(path);
     const srv = lang ? serverOf(lang, path) : null;
     const d = srv?.diagnostics.get(norm(path));
-    return d ? { version: d.version, items: d.items.slice(0, 2e3).map((x) => ({ ...x, message: String(x.message).slice(0, 500) })) } : { version: -1, items: [] };
+    if (!d) return { version: -1, items: [] };
+    const envelope = (items) => ({ version: d.version, items });
+    return envelope(limitItems(d.items.slice(0, 2e3).map((x) => ({ ...x, message: String(x.message).slice(0, 500) })), envelope));
   });
   handle("lsp.serverInfo", async ({ path }) => {
     const srv = await serverForPath(path);
@@ -1042,19 +1263,22 @@ function createCore(host) {
     if (!srv.legend) return { legend: null, data: [] };
     const r = await srv.client.request("textDocument/semanticTokens/full", { textDocument: { uri: uriOf(path) } }, 2e4).catch(() => null);
     const data = Array.isArray(r?.data) ? r.data : [];
-    return { legend: srv.legend, data: data.length > 15e4 ? data.slice(0, 15e4) : data };
+    const groups = [];
+    for (let i = 0; i + 4 < data.length && i < 15e4; i += 5) groups.push(data.slice(i, i + 5));
+    return { legend: srv.legend, data: limitItems(groups, (groups2) => ({ legend: srv.legend, data: groups2.flat() })).flat() };
   });
   handle("lsp.peek", async ({ path, line }) => {
     if (!peekable.has(norm(path))) return { text: "", lang: null };
     const lang = langOfPath(path) ?? "cpp";
     const LIMIT = 3e5;
     let text;
+    const live = serverOf(lang, path)?.open.has(norm(path));
     try {
-      text = readFileSync2(path, "utf8");
+      text = (live ? docs.get(norm(path)) : void 0) ?? readFileSync2(path, "utf8");
     } catch {
       return { text: "", lang };
     }
-    if (text.length <= LIMIT) return { text, lang };
+    if (jsonBytes({ text, lang }) <= RESPONSE_BUDGET) return { text, lang };
     const lines = text.split("\n");
     const at = Math.max(0, Math.min(lines.length - 1, line ?? 0));
     let from = at, to = at, size = lines[at].length;
@@ -1068,7 +1292,14 @@ function createCore(host) {
         size += lines[from].length + 1;
       }
     }
-    return { text: lines.map((l, i) => i >= from && i <= to ? l : "").join("\n"), lang, window: [from, to] };
+    let windowText = lines.map((l, i) => i >= from && i <= to ? l : "").join("\n");
+    while (jsonBytes({ text: windowText, lang, window: [from, to] }) > RESPONSE_BUDGET && from < to) {
+      if (at - from > to - at) from++;
+      else to--;
+      windowText = lines.map((l, i) => i >= from && i <= to ? l : "").join("\n");
+    }
+    if (jsonBytes({ text: windowText, lang, window: [from, to] }) > RESPONSE_BUDGET) return { text: "", lang, truncated: true };
+    return { text: windowText, lang, window: [from, to] };
   });
   handle("lsp.reveal", async ({ path, line }) => host.reveal ? host.reveal(path, line) : { opened: false, reason: "no-host" });
   return { handlers, workspaceRemoved, shutdown: () => {

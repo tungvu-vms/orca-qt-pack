@@ -1,0 +1,27 @@
+name: Qt Code Intelligence
+on:
+  push:
+    paths: ['lsp-build/**', 'plugins/qt-lsp/**', 'types/orca/**', '.github/workflows/qt-lsp.yml']
+  pull_request:
+    paths: ['lsp-build/**', 'plugins/qt-lsp/**', 'types/orca/**', '.github/workflows/qt-lsp.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: lsp-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: lsp-build/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run check:build
+      - run: npm run test:ui
+      - run: npm run test:ui:large

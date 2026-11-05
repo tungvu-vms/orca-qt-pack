@@ -13,6 +13,7 @@ import { createCore } from './core'
 import { RemoteAgent, findSsh, isValidHost } from './remote'
 import { EXT_RE, PROBE_SKIP } from './probe-script'
 import type { AttachInput, AttachOutput } from './protocol'
+import { limitItems, POST_BUDGET } from './transport'
 
 const WIN = process.platform === 'win32'
 const norm = (p: string) => (WIN ? p.toLowerCase() : p)
@@ -154,15 +155,23 @@ export default function activate(orca: OrcaWorkerApi): void {
   // ---------- other hosts over SSH ----------
   const agents = new Map<string, RemoteAgent>()
   let agentSource: string | null = null
-  const cfg = { sshPath: '', remoteRoots: '', remoteNode: '' }
+  let cfg = { sshPath: '', remoteRoots: '', remoteNode: '', projectEnvironments: 'on', typeCheckingMode: 'off' }
   const loadCfg = async () => {
-    cfg.sshPath = String(await setting('sshPath', ''))
-    cfg.remoteRoots = String(await setting('remoteRoots', ''))
-    cfg.remoteNode = String(await setting('remoteNode', ''))
+    const [sshPath, remoteRoots, remoteNode, projectEnvironments, typeCheckingMode] = await Promise.all([
+      setting('sshPath', ''), setting('remoteRoots', ''), setting('remoteNode', ''),
+      setting('projectEnvironments', 'on'), setting('typeCheckingMode', 'off')
+    ])
+    cfg = { sshPath: String(sshPath), remoteRoots: String(remoteRoots), remoteNode: String(remoteNode), projectEnvironments: String(projectEnvironments), typeCheckingMode: String(typeCheckingMode) }
   }
-  const cfgReady = loadCfg()
+  let cfgReady = loadCfg()
   try {
-    (orca.settings as any).onDidChange?.(() => { void loadCfg(); for (const a of agents.values()) a.stop(); agents.clear() })
+    (orca.settings as any).onDidChange?.((change: { key?: string }) => {
+      // This setting only controls frame markers; preserve remote unsaved buffers.
+      if (change?.key === 'pythonDiagnostics') return
+      cfgReady = cfgReady.then(loadCfg)
+      for (const a of agents.values()) a.stop()
+      agents.clear()
+    })
   } catch { /* older Orca versions have no onDidChange */ }
   const extraHosts = async () => String(await setting('remoteHosts', '')).split(/[\s,;]+/).map((s) => s.trim()).filter(isValidHost)
 
@@ -170,11 +179,12 @@ export default function activate(orca: OrcaWorkerApi): void {
     let a = agents.get(host)
     if (!a) {
       agentSource ??= readFileSync(join(HERE, 'agent.mjs'), 'utf8')
-      a = new RemoteAgent(host, findSsh(cfg.sshPath), agentSource, { remoteRoots: cfg.remoteRoots, remoteNode: cfg.remoteNode })
+      a = new RemoteAgent(host, findSsh(cfg.sshPath), agentSource, { remoteRoots: cfg.remoteRoots, remoteNode: cfg.remoteNode, projectEnvironments: cfg.projectEnvironments, typeCheckingMode: cfg.typeCheckingMode })
       a.log = (l) => orca.log(l)
       a.onEvent = (ev, p: any) => {
         // Agent events carry remote paths: tag them with the host before posting to the editor
         if (p && typeof p.path === 'string') p = { ...p, path: tag(host, p.path) }
+        if (p?.items) p = { ...p, items: limitItems(p.items, (items) => ({ ...p, items }), POST_BUDGET) }
         orca.panels.post(ev as any, p)
       }
       agents.set(host, a)
@@ -182,7 +192,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     return a
   }
   async function agentFor(host: string): Promise<RemoteAgent> {
-    await cfgReady
+    let pending: Promise<void>
+    do { pending = cfgReady; await pending } while (pending !== cfgReady)
     const a = remoteFor(host)
     await a.start()
     return a
@@ -299,7 +310,11 @@ export default function activate(orca: OrcaWorkerApi): void {
     const a = await agentFor(target.host)
     const out = tagPaths(target.host, await a.call(name, { ...input, path: target.path }))
     // Remote host: Orca cannot open a tab for that file via the plugin -> the editor shows a peek instead
-    if (name === 'lsp.definition' && out?.locations) for (const l of out.locations) { l.inWorkspace = false; l.openable = false }
+    if ((name === 'lsp.definition' || name === 'lsp.references') && out?.locations) for (const l of out.locations) { l.inWorkspace = false; l.openable = false }
+    if (out?.locations) {
+      const capped = limitItems(out.locations, (locations) => ({ ...out, locations, truncated: true }))
+      if (capped.length < out.locations.length) { out.locations = capped; out.truncated = true }
+    }
     return out
   }
 
