@@ -53,7 +53,7 @@
       "releases": [
         {
           "version": "0.5.0",
-          "commit": "1c200e32d2cc855ccfb4302e1dda6acb75a69ba8",
+          "commit": "f1fd58fa847e382b37aa3ca7e014c8c2f175d315",
           "contentHash": "52361d1aa404b1deaffe20e65de50f767488d301de8116cdd2e5d463c8ff2843",
           "execution": "trusted-worker",
           "minimumOrca": "1.4.248",
@@ -242,7 +242,7 @@
       "releases": [
         {
           "version": "0.2.0",
-          "commit": "1c200e32d2cc855ccfb4302e1dda6acb75a69ba8",
+          "commit": "f1fd58fa847e382b37aa3ca7e014c8c2f175d315",
           "contentHash": "d087ce4e6392207c8734754f706a459caf6b9868d737f3fa10d64b673f6bc592",
           "execution": "trusted-worker",
           "minimumOrca": "1.4.248",
