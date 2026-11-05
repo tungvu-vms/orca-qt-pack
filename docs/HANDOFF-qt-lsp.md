@@ -107,10 +107,41 @@ Primary sources checked:
 - [Pylance indexing](https://github.com/microsoft/pylance-release/blob/main/docs/settings/python_analysis_indexing.md)
 - [Pylance index persistence](https://github.com/microsoft/pylance-release/blob/main/docs/settings/python_analysis_persistAllIndices.md)
 
+### Reusable VS Code components and embedding options
+
+The current plugin already embeds Monaco (the editor extracted from VS Code),
+vscode-textmate and vscode-oniguruma. Adding a full VS Code workbench is a different
+integration project; it is not an established performance fix for this plugin.
+
+| Component | Useful role here | Integration limits / performance evidence |
+| --- | --- | --- |
+| [Microsoft Monaco](https://github.com/microsoft/monaco-editor) | Existing editor, providers, undo, peek and editor workers | Only its public API is versioned; private services need pinned compatibility. Monaco does not directly run arbitrary VS Code extensions. |
+| [Microsoft vscode-jsonrpc / language-server-protocol](https://github.com/microsoft/vscode-languageserver-node) | Replace hand-written stdio framing/request bookkeeping with a maintained transport/protocol implementation | vscode-jsonrpc is standalone. The full vscode-languageclient targets the VS Code extension environment; an Orca adapter is still needed. No automatic analyzer speedup should be claimed. |
+| [CodinGame monaco-vscode-api](https://github.com/CodinGame/monaco-vscode-api) | Selective VS Code model/files/configuration/TextMate services; model references dispose when unused | Requires virtual filesystem and host adaptation. Keep Orca's document sessions as the persistence owner; do not add a competing save path. More services/extension hosts may increase startup and memory; benchmark a small spike first. |
+| [TypeFox monaco-languageclient](https://github.com/TypeFox/monaco-languageclient) | Established Monaco-to-language-server integration and examples | Current documented stack aligns with Monaco 0.57.0, while this plugin uses 0.52.2. Migration requires a compatibility upgrade and adaptation to Orca's framed bridge, not a drop-in import. |
+| [TextMate worker service](https://github.com/CodinGame/monaco-vscode-api/wiki/Getting-started-guide) | Move heavy grammar work away from the UI thread | Current textmate.ts calls tokenizeLine synchronously in the frame. Its existing editor.worker does not offload that custom tokenizer. Profile typing before/after; worker messaging and model mirrors also have costs. |
+
+Prioritize a measured file-cancellation/background-analysis prototype and UI-thread
+tokenization profiling, then transport/model-service migration where it removes
+custom lifecycle logic. Shared editor/model services across Orca's separate isolated
+file frames require host support; placing another full runtime in each frame does
+not create sharing automatically.
+
+Keep language-specific engines: [clangd](https://clangd.llvm.org/design/indexing)
+already has dynamic/background indices and persistent .idx shards driven by
+compile_commands.json. [qmlls](https://doc.qt.io/qt-6/qtqml-tooling-qmlls.html) needs
+the right Qt kit, import/build paths and generated type information. A generic
+VS Code UI does not replace these engines or their project configuration.
+
+The development manifest now uses `priority: default` for all three LSP editors,
+as requested. Existing tabs/preferences can retain their chosen view; Source is
+still available. The published main catalog remains a separate release.
+
 ## What it is
 
 `plugins/qt-lsp` = Orca plugin **Qt Code Intelligence** (`tungvu-vms.qt-dev-python-lsp`, v0.5.0).
-`trusted-worker` + three custom editors (`Python (LSP)`, `QML (LSP)`, `C++ (LSP)`, `priority: option`).
+`trusted-worker` + three custom editors (`Python (LSP)`, `QML (LSP)`, `C++ (LSP)`, `priority: default`).
+The development editors now open supported Python/QML/C/C++ files by default; Source remains selectable.
 Source lives in `lsp-build/src`, built into `plugins/qt-lsp` by `cd lsp-build && npm ci && node build.mjs`.
 
 | File | Role |

@@ -45,8 +45,10 @@ Orca checks the catalog for updates by itself; Settings → Plugins → ↻ chec
 ### 3. Use
 
 - **Qt Tools:** the wrench icon in the right sidebar.
-- **Code Intelligence:** open a `.py` / `.qml` / `.cpp` / `.h` file and pick **Python (LSP)** / **QML (LSP)** /
-  **C++ (LSP)** in the view switcher next to **Source**.
+- **Code Intelligence (development checkout):** `.py` / `.pyi` / `.pyw`, `.qml`, and the supported C/C++
+  source/header files open in **Python (LSP)** / **QML (LSP)** / **C++ (LSP)** by default, with Ctrl+Click/F12.
+  **Source** stays available in the view switcher. If an existing tab is still in Source, select its LSP view once.
+  Language navigation becomes available after the corresponding server connects and analyzes the file.
   - Status bar: server state and problem count. 🐍 (Python) switches the interpreter; ⚙ (QML/C++) restarts the server
     (press it after the first CMake configure). ⇄ shows and changes which machine the project's code is on.
   - Ctrl+Click into a file inside an Orca workspace (your project, its venv, the build folder) opens it as an Orca tab at

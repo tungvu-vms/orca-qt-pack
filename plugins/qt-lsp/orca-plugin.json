@@ -30,7 +30,7 @@
           ".pyw"
         ],
         "entry": "editor/python.html",
-        "priority": "option",
+        "priority": "default",
         "contentKind": "text",
         "frame": "isolated"
       },
@@ -41,7 +41,7 @@
           ".qml"
         ],
         "entry": "editor/qml.html",
-        "priority": "option",
+        "priority": "default",
         "contentKind": "text",
         "frame": "isolated"
       },
@@ -61,7 +61,7 @@
           ".ipp"
         ],
         "entry": "editor/cpp.html",
-        "priority": "option",
+        "priority": "default",
         "contentKind": "text",
         "frame": "isolated"
       }
