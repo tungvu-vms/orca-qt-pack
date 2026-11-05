@@ -195,6 +195,10 @@ try {
     await page.locator('.monaco-editor textarea').first().focus()
     await page.keyboard.press('Control+End')
     await page.keyboard.insertText('\n# typed during initialization\n')
+    // Compare the actual editor draft; native input can apply newline/indent
+    // behavior differently across Chromium versions on the Windows runner.
+    const initialDraft = await page.evaluate(() => window.__session.value)
+    assert(initialDraft.includes('# typed during initialization'))
     releaseInitialOpen()
     for (let i = 0; i < 100 && !releaseFirstUpload; i++) await page.waitForTimeout(30)
     assert(releaseFirstUpload, 'initial upload must be pending')
@@ -211,7 +215,7 @@ try {
     assert(calls.some((c) => c.name === 'lsp.open' && c.input.text === undefined), 'large initial opens must read disk rather than send the entire file')
     const upload = calls.filter((c) => c.name === 'lsp.upload')
     assert(upload.length > 1 && upload.at(-1).result?.ok, 'edits made while opening must be uploaded in small chunks')
-    assert.equal(upload.map((c) => c.input.part).join(''), text + '\n# typed during initialization\n')
+    assert.equal(upload.map((c) => c.input.part).join(''), initialDraft)
     await core.handlers['lsp.references']({ path: helperPath, position: { line: 0, character: 5 }, includeDeclaration: true })
     const synced = await core.handlers['lsp.peek']({ path, line: 0 })
     assert.equal(synced.text, await page.evaluate(() => window.__session.value), 'typing during a chunk upload must reach the worker after the upload commits')
