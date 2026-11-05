@@ -67,6 +67,13 @@ Read `README.md` first (install, settings, SSH, security). This file is the work
   `monaco-workarounds.mjs` also releases a model reference that arrives after a
   reference group was closed, and duplicates from concurrent group resolution.
   The resolver pins models before asynchronous acquisition to prevent eviction races.
+- Idle-worker navigation recovery: document-read RPCs now carry the editor revision.
+  A fresh/restarted worker requests resync instead of answering against disk at draft
+  coordinates. The frame coalesces recovery on the edit queue, reuploads the unsaved
+  draft and retries once. No disk save is performed. Browser regression replaces the
+  source with an unsaved class import/call, restarts the real core and verifies that
+  Ctrl+Click still opens its definition. A real-file mode can check every occurrence
+  using QT_LSP_UI_ALL_POSITIONS=1 (used for SettingScreenQSettings in VMS.py).
 
 ## Research follow-up: VS Code responsiveness (not implemented)
 

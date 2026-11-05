@@ -56,3 +56,17 @@ test('restart during initialization starts a replacement rather than reusing the
     await original
   } finally { core.shutdown(); assert(root.startsWith(join(tmpdir(), 'qt-lsp-restart-'))); rmSync(root, { recursive: true, force: true }) }
 })
+
+test('revisioned reads request resync after worker state is lost, without analyzing disk at draft coordinates', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'qt-lsp-revision-')), path = join(root, 'main.py'), logs = []
+  writeFileSync(path, 'disk_value = 1\n')
+  const core = createCore({ log: (line) => logs.push(line), post() {}, setting: async (_, fallback) => fallback,
+    storageGet: async () => null, storageSet: async () => {}, roots: async () => ({ focused: root, roots: [root] }) })
+  try {
+    for (const method of ['lsp.definition', 'lsp.hover', 'lsp.completion', 'lsp.signatureHelp', 'lsp.documentSymbols', 'lsp.references', 'lsp.documentHighlights', 'lsp.semanticTokens', 'lsp.prepareRename']) {
+      const result = await core.handlers[method]({ path, position: { line: 15, character: 10 }, version: 3 })
+      assert.deepEqual(result, { resync: true }, method)
+    }
+    assert.equal(logs.length, 0, 'no server should start using the wrong on-disk text')
+  } finally { core.shutdown(); assert(root.startsWith(join(tmpdir(), 'qt-lsp-revision-'))); rmSync(root, { recursive: true, force: true }) }
+})

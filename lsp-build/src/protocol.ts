@@ -5,6 +5,11 @@ export interface Range { start: Pos; end: Pos }
 export interface Loc { path: string; range: Range; inWorkspace: boolean; openable?: boolean }
 
 export type Lang = 'python' | 'qml' | 'cpp'
+/** Reads that require the worker to hold the editor's current unsaved revision. */
+export const DOCUMENT_READ_METHODS = new Set([
+  'lsp.hover', 'lsp.definition', 'lsp.references', 'lsp.signatureHelp', 'lsp.documentSymbols',
+  'lsp.documentHighlights', 'lsp.semanticTokens', 'lsp.completion', 'lsp.prepareRename'
+])
 /** `hash` = sha1 of the content (CRLF -> LF), so attach stays under the 64 KiB input limit. `text` is for older versions only. */
 export interface AttachInput { language: Lang; hash?: string; text?: string; size?: number; sizeCrlf?: number; /** worker -> agent: workspace paths Orca knows on the other machine */ hints?: string[] }
 export interface AttachOutput {
@@ -22,7 +27,7 @@ export interface AttachOutput {
 export interface TextEdit { offset: number; length: number; text: string }
 /** open: `text` (small file) or omitted so the worker reads from disk. change: `edits` (+ `expectLength`) or `text`. */
 export interface DocInput { path: string; version: number; text?: string; edits?: TextEdit[]; expectLength?: number }
-export interface PosInput { path: string; position: Pos; requestId?: string }
+export interface PosInput { path: string; position: Pos; requestId?: string; version?: number }
 
 export interface HoverOutput { markdown: string | null; range: Range | null }
 export interface DefinitionOutput { locations: Loc[] }

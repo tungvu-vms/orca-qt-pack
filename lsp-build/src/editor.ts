@@ -28,6 +28,7 @@ import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker'
 import type { AttachOutput, CompletionOutput, DefinitionOutput, DiagnosticsOutput, HoverOutput, Loc, Pos } from './protocol'
 import { registerIdeProviders } from './ide-providers'
 import { chunkText, messageBytes, REQUEST_BUDGET } from './transport'
+import { DOCUMENT_READ_METHODS } from './protocol'
 
 declare const orca: import('orca/frame').OrcaFrameApi
 
@@ -42,13 +43,24 @@ const setStatus = (text: string, tone: 'ok' | 'warn' | 'err' | 'busy' = 'ok') =>
   statusEl.textContent = text
   statusEl.dataset.tone = tone
 }
+let documentSync: { path: string; version(): number; recover(): Promise<void> } | null = null
 async function req<T>(name: string, input: unknown, timeoutMs = 20000, signal?: AbortSignal): Promise<T> {
   const clean = JSON.parse(JSON.stringify(input ?? null))
   const deadline = Date.now() + timeoutMs
+  let recovered = false
   for (;;) {
     if (signal?.aborted) throw Object.assign(new Error('Request cancelled'), { name: 'AbortError' })
     try {
-      return await orca.plugin.request(name as any, clean, { timeoutMs: Math.max(1, deadline - Date.now()), signal }) as T
+      const sync = documentSync && clean?.path === documentSync.path && DOCUMENT_READ_METHODS.has(name) ? documentSync : null
+      if (sync) clean.version = sync.version()
+      const result = await orca.plugin.request(name as any, clean, { timeoutMs: Math.max(1, deadline - Date.now()), signal }) as T
+      if (sync && (result as { resync?: boolean } | null)?.resync) {
+        if (recovered) throw new Error('The language server lost the document again. Retry navigation.')
+        recovered = true
+        await sync.recover()
+        continue
+      }
+      return result
     } catch (error) {
       const e = error as { code?: string; retryAfterMs?: number }
       const delay = Math.max(50, Number(e.retryAfterMs) || 500)
@@ -413,6 +425,13 @@ async function main() {
     sending = sending.then(resyncFull, resyncFull)
     await sending
   }
+  let recovery: Promise<void> | null = null
+  documentSync = { path, version: () => version, recover: () => {
+    if (recovery) return recovery
+    sending = sending.then(resyncFull, resyncFull)
+    recovery = sending.finally(() => { recovery = null })
+    return recovery
+  } }
   window.addEventListener('beforeunload', () => { void req('lsp.close', { path }) })
 
   // Only serve this editor's model (library peek models have their own URIs).

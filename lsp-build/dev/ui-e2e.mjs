@@ -8,6 +8,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve, extname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import assert from 'node:assert/strict'
+const equalDraft = (actual, expected, label) => {
+  if (actual === expected) return
+  let at = 0
+  while (at < Math.min(actual.length, expected.length) && actual[at] === expected[at]) at++
+  assert.fail(`${label}: lengths ${actual.length}/${expected.length}, first difference ${at}: ${JSON.stringify(actual.slice(at, at + 50))}/${JSON.stringify(expected.slice(at, at + 50))}`)
+}
 
 const scratch = mkdtempSync(join(tmpdir(), 'qt-lsp-ui-'))
 const project = join(scratch, 'project')
@@ -24,6 +30,7 @@ const text = realFile ? readFileSync(path, 'utf8') : baseText + (largeMode ? ('#
 if (!realFile) writeFileSync(path, text)
 const helperPath = join(project, 'helper.py')
 writeFileSync(helperPath, 'def greet(name: str, count: int = 1) -> str:\n    return name * count\n' + ('#' + 'x'.repeat(998) + '\n').repeat(1798) + 'greet("last")\n\ndef discoverable_symbol() -> str:\n    return "Qt"\n')
+writeFileSync(helperPath, readFileSync(helperPath, 'utf8') + '\nclass DemoSettings:\n    pass\n')
 if (stressMode) writeFileSync(helperPath, readFileSync(helperPath, 'utf8') + Array.from({ length: 80 }, (_, i) => `\ndef target_${i}() -> int:\n    return ${i}\n`).join(''))
 if (evictionMode) {
   const tail = Array.from({ length: 80 }, (_, i) => `import target_${i}\ntarget_${i}.go()\n`).join('')
@@ -40,10 +47,11 @@ if (realFile) { config.python = process.env.QT_LSP_TEST_PYTHON; config.projectEn
 const calls = [], reveals = [], errors = []
 let delayRename = false, failNextChange = false
 let releaseInitialOpen, releaseFirstUpload, heldFirstUpload = false
-const core = createCore({ log() {}, post() {}, setting: async (k, fallback) => config[k] ?? fallback,
+const coreHost = { log() {}, post() {}, setting: async (k, fallback) => config[k] ?? fallback,
   storageGet: async () => null, storageSet: async () => {}, roots: async () => ({ focused: realFile ? process.env.QT_LSP_UI_ROOT : project, roots: [realFile ? process.env.QT_LSP_UI_ROOT : project] }),
   reveal: async (path, line) => { reveals.push({ path, line }); return { opened: true, line } }
-})
+}
+let core = createCore(coreHost)
 const assets = resolve('../plugins/qt-lsp/editor')
 const bridge = `<script>
 const listeners = new Map();
@@ -178,8 +186,11 @@ try {
     await page.locator('#interp:not([hidden])').waitFor({ timeout: 15000 })
     const word = process.env.QT_LSP_UI_SYMBOL
     assert(word && process.env.QT_LSP_UI_ROOT && process.env.QT_LSP_TEST_PYTHON, 'real-file mode needs UI_ROOT, UI_SYMBOL and TEST_PYTHON')
-    const lines = text.split('\n'), line = lines.findLastIndex((text) => text.includes(word)), column = lines[line].indexOf(word) + 2
-    for (let run = 1; run <= 3; run++) {
+    const lines = text.split('\n')
+    const positions = process.env.QT_LSP_UI_ALL_POSITIONS === '1' ? lines.flatMap((line, i) => line.includes(word) ? [i] : []) : [lines.findLastIndex((line) => line.includes(word))]
+    assert(positions.length && positions.every((line) => line >= 0), 'symbol must exist in the requested file')
+    for (const line of positions) for (let run = 1; run <= (positions.length === 1 ? 3 : 1); run++) {
+      const column = lines[line].indexOf(word) + 2
       await go(line + 1, column)
       const symbol = page.locator('.view-lines .view-line').filter({ hasText: lines[line].trim() }).getByText(word, { exact: true })
       await page.mouse.move(1, 1)
@@ -187,7 +198,7 @@ try {
       await symbol.click({ modifiers: ['Control'] })
       for (let i = 0; i < 300 && reveals.length === before; i++) await page.waitForTimeout(50)
       assert.equal(reveals.length, before + 1, 'real-project Ctrl+Click must resolve')
-      console.log(JSON.stringify({ run, action: 'Ctrl+Click', symbol: word, ms: Date.now() - started, target: reveals.at(-1).path }))
+      console.log(JSON.stringify({ run, sourceLine: line + 1, action: 'Ctrl+Click', symbol: word, ms: Date.now() - started, target: reveals.at(-1).path, targetLine: reveals.at(-1).line }))
     }
   } else if (largeMode) {
     for (let i = 0; i < 100 && !releaseInitialOpen; i++) await page.waitForTimeout(30)
@@ -210,15 +221,15 @@ try {
     assert(!await page.locator('#status').innerText().then((s) => s.includes('message too large')), 'large files must finish initialization')
     await go(text.split('\n').length - 1, 17)
     await page.keyboard.press('F12')
-    for (let i = 0; i < 50 && !reveals.length; i++) await page.waitForTimeout(50)
+    for (let i = 0; i < 200 && !reveals.length; i++) await page.waitForTimeout(50)
     assert(reveals.some((r) => r.path.toLowerCase().endsWith('helper.py')), 'definition at the end of a 2400-line file must resolve')
     assert(calls.some((c) => c.name === 'lsp.open' && c.input.text === undefined), 'large initial opens must read disk rather than send the entire file')
     const upload = calls.filter((c) => c.name === 'lsp.upload')
     assert(upload.length > 1 && upload.at(-1).result?.ok, 'edits made while opening must be uploaded in small chunks')
-    assert.equal(upload.map((c) => c.input.part).join(''), initialDraft)
+    equalDraft(upload.map((c) => c.input.part).join(''), initialDraft, 'initial upload snapshot')
     await core.handlers['lsp.references']({ path: helperPath, position: { line: 0, character: 5 }, includeDeclaration: true })
     const synced = await core.handlers['lsp.peek']({ path, line: 0 })
-    assert.equal(synced.text, await page.evaluate(() => window.__session.value), 'typing during a chunk upload must reach the worker after the upload commits')
+    equalDraft(synced.text, await page.evaluate(() => window.__session.value), 'typing during a chunk upload must reach the worker after the upload commits')
     console.log('PASS 2400+ lines: initialize under the 64 KiB request limit and navigate from the end')
     for (let attempt = 0; attempt < 5; attempt++) {
       await go(text.split('\n').length - 1, 1)
@@ -417,6 +428,27 @@ try {
   await page.locator('.squiggly-error').first().waitFor({ state: 'visible' })
   assert.equal(await page.evaluate(() => localStorage.getItem('pythonDiagnostics')), 'true')
   console.log('PASS diagnostics: F1 toggle clears markers, persists choice and restores diagnostics')
+  // An idle Orca worker can restart while this frame still has unsaved text.
+  const unsavedClass = '\n'.repeat(10) + 'from helper import DemoSettings\n\ninstance = DemoSettings()\n'
+  await page.locator('.monaco-editor textarea').first().focus()
+  await page.keyboard.press('Control+a')
+  await page.keyboard.insertText(unsavedClass)
+  await page.waitForTimeout(350)
+  const warmReveals = reveals.length
+  await go(13, 15)
+  await page.keyboard.press('F12')
+  for (let i = 0; i < 100 && reveals.length === warmReveals; i++) await page.waitForTimeout(20)
+  assert.equal(reveals.length, warmReveals + 1, 'the unsaved class must resolve before restart')
+  core.shutdown(); core = createCore(coreHost)
+  await go(13, 1)
+  await page.mouse.move(1, 1)
+  const restartedReveals = reveals.length
+  await page.locator('.view-lines .view-line').filter({ hasText: 'instance = DemoSettings()' }).getByText('DemoSettings', { exact: true }).click({ modifiers: ['Control'] })
+  for (let i = 0; i < 100 && reveals.length === restartedReveals; i++) await page.waitForTimeout(20)
+  assert.equal(reveals.length, restartedReveals + 1, 'class navigation must restore unsaved text after worker restart')
+  assert.equal(await page.evaluate(() => window.__session.value), unsavedClass)
+  assert.equal(readFileSync(path, 'utf8'), text, 'navigation recovery must not save the draft')
+  console.log('PASS class Ctrl+Click: an idle worker restart resynchronizes the unsaved editor before lookup')
   }
 
   assert.deepEqual(errors, [], 'no uncaught browser errors')
@@ -424,7 +456,7 @@ try {
   if (capture) await page.screenshot({ path: capture })
   console.log('All editor keyboard checks passed.')
 } catch (e) {
-  console.error('Recent RPCs:', calls.slice(-10).map((c) => ({ name: c.name, position: c.input?.position, rejectReason: c.result?.rejectReason })))
+  console.error('Recent RPCs:', calls.slice(-15).map((c) => ({ name: c.name, position: c.input?.position, version: c.input?.version, resync: c.result?.resync, locations: c.result?.locations?.length, rejectReason: c.result?.rejectReason })))
   console.error('Browser errors:', errors)
   if (page && !page.isClosed()) {
     console.error('Visible text:', (await page.locator('body').innerText()).slice(-2500))

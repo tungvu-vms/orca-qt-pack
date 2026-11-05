@@ -16,6 +16,7 @@ import type {
   ReferencesOutput, SignatureHelpOutput, DocumentSymbolsOutput, DocumentSymbol, DocumentHighlightsOutput, PrepareRenameOutput, RenameOutput, SourceEdit
 } from './protocol'
 import { jsonBytes, messageBytes, limitItems, POST_BUDGET, RESPONSE_BUDGET } from './transport'
+import { DOCUMENT_READ_METHODS } from './protocol'
 
 const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', 'env', 'dist', '.orca', '.mypy_cache', '.pytest_cache', 'site-packages', '.cache', '.qtc_clangd',
   // workspace is the home folder (e.g. /Users/<name>): skip large system/media folders
@@ -71,7 +72,16 @@ export function createCore(host: CoreEnv): Core {
   const handlers: Record<string, Handler> = {}
   // Orca rejects undefined object properties even though JSON.stringify omits them.
   // Keep the shared RPC boundary identical for in-process tests and the SSH agent.
-  const handle = (name: string, fn: Handler) => { handlers[name] = async (input) => JSON.parse(JSON.stringify((await fn(input)) ?? null)) }
+  const handle = (name: string, fn: Handler) => { handlers[name] = async (input) => {
+    if (DOCUMENT_READ_METHODS.has(name) && Number.isInteger(input?.version)) {
+      const lang = langOfPath(input.path)
+      const server = lang ? serverOf(lang, input.path) : null
+      // Orca can reap an idle worker while its editor frame remains open. Do not
+      // answer against disk content at coordinates belonging to an unsaved draft.
+      if (!docs.has(norm(input.path)) || server?.open.get(norm(input.path)) !== input.version) return { resync: true }
+    }
+    return JSON.parse(JSON.stringify((await fn(input)) ?? null))
+  } }
   const servers = new Map<string, Server>()
   const starting = new Map<string, Promise<Server>>()
   const hashIndex = new Map<string, { at: number; byHash: Map<string, string[]> }>()

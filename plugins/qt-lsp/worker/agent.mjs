@@ -584,6 +584,19 @@ function limitItems(items, envelope, budget = RESPONSE_BUDGET) {
   return items.slice(0, count);
 }
 
+// src/protocol.ts
+var DOCUMENT_READ_METHODS = /* @__PURE__ */ new Set([
+  "lsp.hover",
+  "lsp.definition",
+  "lsp.references",
+  "lsp.signatureHelp",
+  "lsp.documentSymbols",
+  "lsp.documentHighlights",
+  "lsp.semanticTokens",
+  "lsp.completion",
+  "lsp.prepareRename"
+]);
+
 // src/core.ts
 var SKIP2 = /* @__PURE__ */ new Set([
   "node_modules",
@@ -618,7 +631,14 @@ var langOfPath = (p) => EXTS_OF_LANG.python.test(p) ? "python" : EXTS_OF_LANG.qm
 function createCore(host) {
   const handlers = {};
   const handle = (name, fn) => {
-    handlers[name] = async (input) => JSON.parse(JSON.stringify(await fn(input) ?? null));
+    handlers[name] = async (input) => {
+      if (DOCUMENT_READ_METHODS.has(name) && Number.isInteger(input?.version)) {
+        const lang = langOfPath(input.path);
+        const server = lang ? serverOf(lang, input.path) : null;
+        if (!docs.has(norm(input.path)) || server?.open.get(norm(input.path)) !== input.version) return { resync: true };
+      }
+      return JSON.parse(JSON.stringify(await fn(input) ?? null));
+    };
   };
   const servers = /* @__PURE__ */ new Map();
   const starting = /* @__PURE__ */ new Map();
