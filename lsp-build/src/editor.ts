@@ -22,6 +22,7 @@ import { installTextMate, semanticToken, textMateRules, type Lang } from './text
 import { StandaloneServices } from 'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'
 import { IConfigurationService } from 'monaco-editor/esm/vs/platform/configuration/common/configuration.js'
 import { ICommandService } from 'monaco-editor/esm/vs/platform/commands/common/commands.js'
+import { ITextModelService } from 'monaco-editor/esm/vs/editor/common/services/resolverService.js'
 import 'monaco-editor/esm/vs/editor/contrib/semanticTokens/browser/documentSemanticTokens.js'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker'
 import type { AttachOutput, CompletionOutput, DefinitionOutput, DiagnosticsOutput, HoverOutput, Loc, Pos } from './protocol'
@@ -451,6 +452,60 @@ async function main() {
   //  - libraries (site-packages, typeshed): open a read-only model and show a peek inside this editor.
   const navigationTargets = new Map<string, Loc>()
   const peekModels = new Set<monaco.editor.ITextModel>()
+  const previewUses = new Map<string, { pins: number; used: number }>()
+  let previewClock = 0
+  const prunePreviews = (protectedUris = new Set<string>()) => {
+    const models = [...peekModels].filter((m) => !m.isDisposed())
+    let bytes = models.reduce((sum, m) => sum + m.getValueLength() * 2, 0), count = models.length
+    models.sort((a, b) => (previewUses.get(a.uri.toString())?.used ?? 0) - (previewUses.get(b.uri.toString())?.used ?? 0))
+    for (const m of models) {
+      if (count <= 6 && bytes <= 4 * 1024 * 1024) break
+      const key = m.uri.toString()
+      if (protectedUris.has(key) || (previewUses.get(key)?.pins ?? 0) > 0) continue
+      bytes -= m.getValueLength() * 2; count--
+      peekModels.delete(m); previewUses.delete(key); m.dispose()
+    }
+  }
+  const loadPreview = async (loc: Loc, requestedUri?: monaco.Uri) => {
+    const r = await req<{ text?: string; window?: [number, number] }>('lsp.peek', { path: loc.path, line: loc.range.start.line }).catch(() => null)
+    // The actual returned window identifies reusable text. Per-line URIs retained
+    // a fresh copy of the same large file for every Ctrl-hover/definition.
+    const uri = requestedUri ?? monaco.Uri.from({ scheme: (loc.openable ?? loc.inWorkspace) ? 'orca-ws' : 'orca-lib',
+      path: '/' + loc.path.replace(/\\/g, '/'), query: r?.window ? `window=${r.window[0]}-${r.window[1]}` : 'full' })
+    const peekLang = /\.pyi?$/i.test(loc.path) ? 'python' : /\.qml$/i.test(loc.path) ? 'qml' : 'cpp'
+    let target = monaco.editor.getModel(uri)
+    if (!target) {
+      target = monaco.editor.createModel(r?.text ?? '', peekLang, uri)
+      peekModels.add(target)
+      if (peekLang !== LANG) void installTextMate(peekLang as Lang)
+    } else if (target.getValue() !== (r?.text ?? '')) target.setValue(r?.text ?? '')
+    const use = previewUses.get(uri.toString()) ?? { pins: 0, used: 0 }
+    use.used = ++previewClock; previewUses.set(uri.toString(), use)
+    navigationTargets.set(uri.toString(), loc)
+    return { uri, from: r?.window?.[0] ?? 0, to: r?.window?.[1] ?? Number.MAX_SAFE_INTEGER }
+  }
+  // Monaco's standalone resolver uses immortal references. Track consumers here
+  // so an open peek stays alive while unused preview models can be evicted.
+  const resolver = StandaloneServices.get(ITextModelService)
+  const originalReference = resolver.createModelReference.bind(resolver)
+  resolver.createModelReference = async (uri: monaco.Uri) => {
+    const key = uri.toString(), loc = navigationTargets.get(key)
+    if (!loc) return originalReference(uri)
+    // Pin before either await: releasing another preview while this acquisition
+    // is suspended must not evict the model that the reference is about to use.
+    const use = previewUses.get(key) ?? { pins: 0, used: 0 }
+    previewUses.set(key, use); use.pins++; use.used = ++previewClock
+    try {
+      if (!monaco.editor.getModel(uri)) await loadPreview(loc, uri)
+      const ref = await originalReference(uri)
+      let disposed = false
+      return { object: ref.object, dispose: () => {
+        if (disposed) return
+        disposed = true; ref.dispose(); use.pins--
+        prunePreviews()
+      } }
+    } catch (e) { use.pins--; prunePreviews(); throw e }
+  }
   const resolveLocations = async (locations: Loc[]): Promise<monaco.languages.Location[]> => {
       // Reuse only actual window coverage within this request. Other tabs can
       // change targets, and 2000 long lines may need more than one byte-limited peek.
@@ -460,23 +515,14 @@ async function main() {
         if (sameFile(loc.path, path)) { out.push({ uri: model.uri, range: toRange(loc.range) }); continue }
         // Monaco needs a real model for every target (even when we open an Orca tab ourselves), otherwise "Model not found".
         // Openable as an Orca tab (file in the workspace, including the project's venv/site-packages) -> orca-ws; otherwise peek
-        const toTab = loc.openable ?? loc.inWorkspace
-        const scheme = toTab ? 'orca-ws' : 'orca-lib'
         const covered = windows.find((w) => sameFile(w.path, loc.path) && loc.range.start.line >= w.from && loc.range.start.line <= w.to)
         if (covered) { out.push({ uri: covered.uri, range: toRange(loc.range) }); continue }
-        const uri = monaco.Uri.from({ scheme, path: '/' + loc.path.replace(/\\/g, '/'), query: `line=${loc.range.start.line}` })
-        const r = await req<{ text?: string; window?: [number, number] }>('lsp.peek', { path: loc.path, line: loc.range.start.line }).catch(() => null)
-        let target = monaco.editor.getModel(uri)
-        if (!target) {
-          const peekLang = /\.pyi?$/i.test(loc.path) ? 'python' : /\.qml$/i.test(loc.path) ? 'qml' : 'cpp'
-          target = monaco.editor.getModel(uri) ?? monaco.editor.createModel(r?.text ?? '', peekLang, uri)
-          peekModels.add(target)
-          if (peekLang !== LANG) void installTextMate(peekLang as Lang)
-        } else if (target.getValue() !== (r?.text ?? '')) target.setValue(r?.text ?? '')
-        windows.push({ path: loc.path, from: r?.window?.[0] ?? 0, to: r?.window?.[1] ?? Number.MAX_SAFE_INTEGER, uri })
-        navigationTargets.set(uri.toString(), loc)
+        const loaded = await loadPreview(loc)
+        const { uri } = loaded
+        windows.push({ path: loc.path, ...loaded })
         out.push({ uri, range: toRange(loc.range) })
       }
+      prunePreviews(new Set(out.map((loc) => loc.uri.toString())))
       return out
   }
   monaco.languages.registerDefinitionProvider(MONACO_LANG, {

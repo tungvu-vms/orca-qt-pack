@@ -16,3 +16,6 @@ declare module 'monaco-editor/esm/vs/platform/configuration/common/configuration
 declare module 'monaco-editor/esm/vs/platform/commands/common/commands.js' {
   export const ICommandService: unknown
 }
+declare module 'monaco-editor/esm/vs/editor/common/services/resolverService.js' {
+  export const ITextModelService: unknown
+}

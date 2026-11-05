@@ -7,6 +7,7 @@
 import { build } from 'esbuild'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { monacoWorkarounds } from './monaco-workarounds.mjs'
 
 const HERE = import.meta.dirname
 const PLUGIN = path.resolve(HERE, '..', 'plugins', 'qt-lsp')
@@ -29,25 +30,6 @@ const workerPlugin = {
   }
 }
 
-// Monaco 0.52.2 does not observe the word highlighter's Delayer rejections.
-// Closing a references peek cancels its pending work. Monaco's error handler
-// ignores CancellationError and reports other failures; use it at both calls.
-// Fail explicitly on an upgrade rather than silently dropping this workaround.
-const cancellationPlugin = {
-  name: 'monaco-highlighter-cancellation',
-  setup(b) {
-    b.onLoad({ filter: /wordHighlighter[\\/]browser[\\/]wordHighlighter\.js$/ }, (args) => {
-      let contents = readFileSync(args.path, 'utf8')
-      for (const callback of ['this._onPositionChanged(e);', 'this._run();']) {
-        const before = `this.runDelayer.trigger(() => { ${callback} });`
-        if (!contents.includes(before)) throw new Error('Monaco highlighter changed: review the cancellation patch before building.')
-        contents = contents.replace(before, `this.runDelayer.trigger(() => { ${callback} }).catch(onUnexpectedError);`)
-      }
-      return { contents, loader: 'js' }
-    })
-  }
-}
-
 const page = await build({
   entryPoints: { editor: path.join(HERE, 'src', 'editor.ts') },
   bundle: true,
@@ -63,7 +45,7 @@ const page = await build({
   assetNames: '[name]-[hash]',
   loader: { '.ttf': 'file', '.wasm': 'base64' },
   external: ['orca/*'],
-  plugins: [workerPlugin, cancellationPlugin],
+  plugins: [workerPlugin, monacoWorkarounds],
   metafile: true,
   logLevel: 'warning'
 })

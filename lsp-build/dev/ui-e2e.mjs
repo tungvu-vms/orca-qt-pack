@@ -17,11 +17,20 @@ mkdirSync(project)
 const realFile = process.env.QT_LSP_UI_FILE
 const path = realFile ? resolve(realFile) : join(project, 'main.py')
 const largeMode = process.env.QT_LSP_LARGE_UI === '1' || process.argv.includes('--large')
+const evictionMode = process.argv.includes('--stress-files')
+const stressMode = process.argv.includes('--stress') || evictionMode
 const baseText = 'from helper import greet\n\nclass WindowModel:\n    def title(self, name: str) -> str:\n        return greet(name, 2)\n\ndef compute(value: int) -> int:\n    doubled = value * 2\n    return doubled\n\nresult = greet("Qt", 2)\nanswer = compute(21)\n'
-const text = realFile ? readFileSync(path, 'utf8') : baseText + (largeMode ? ('# Tiếng Việt 漢字 😀 ' + 'padding '.repeat(12) + '\n').repeat(2400) + 'tail_result = greet("large", 2)\n' : '')
+const text = realFile ? readFileSync(path, 'utf8') : baseText + (largeMode ? ('# Tiếng Việt 漢字 😀 ' + 'padding '.repeat(12) + '\n').repeat(2400) + 'tail_result = greet("large", 2)\n' : '') + (stressMode ? '\nimport helper\n' + Array.from({ length: 80 }, (_, i) => `helper.target_${i}()\n`).join('') : '')
 if (!realFile) writeFileSync(path, text)
 const helperPath = join(project, 'helper.py')
 writeFileSync(helperPath, 'def greet(name: str, count: int = 1) -> str:\n    return name * count\n' + ('#' + 'x'.repeat(998) + '\n').repeat(1798) + 'greet("last")\n\ndef discoverable_symbol() -> str:\n    return "Qt"\n')
+if (stressMode) writeFileSync(helperPath, readFileSync(helperPath, 'utf8') + Array.from({ length: 80 }, (_, i) => `\ndef target_${i}() -> int:\n    return ${i}\n`).join(''))
+if (evictionMode) {
+  const tail = Array.from({ length: 80 }, (_, i) => `import target_${i}\ntarget_${i}.go()\n`).join('')
+  writeFileSync(path, baseText + '\n' + tail)
+  for (let i = 0; i < 80; i++) writeFileSync(join(project, `target_${i}.py`), `def go() -> int:\n    return ${i}\n` + ('#' + 'x'.repeat(998) + '\n').repeat(1800))
+}
+const documentText = evictionMode ? readFileSync(path, 'utf8') : text
 writeFileSync(join(project, 'pyrightconfig.json'), '{}')
 const out = join(scratch, 'core.mjs')
 await build({ entryPoints: ['src/core.ts'], outfile: out, bundle: true, platform: 'node', format: 'esm' })
@@ -40,7 +49,7 @@ const bridge = `<script>
 const listeners = new Map();
 const settingsListeners = new Set();
 window.__publish = (name, payload) => listeners.get(name)?.(payload);
-window.__session = { value: ${JSON.stringify(text)}, readOnly: false, change(value) { this.value = value }, onReplace() { return {dispose(){}} }, flush: async () => {}, dispose() {} };
+window.__session = { value: ${JSON.stringify(documentText)}, readOnly: false, change(value) { this.value = value }, onReplace() { return {dispose(){}} }, flush: async () => {}, dispose() {} };
 window.orca = { document: {session: async () => window.__session}, on() { return {dispose(){}} },
   settings: {
     async get(key) { return key === 'pythonDiagnostics' ? JSON.parse(localStorage.getItem(key) ?? 'true') : undefined },
@@ -130,7 +139,42 @@ try {
     await page.locator('.quick-input-widget').waitFor({ state: 'hidden' })
     await page.waitForTimeout(100)
   }
-  if (realFile) {
+  if (stressMode) {
+    const profiler = await page.context().newCDPSession(page)
+    await profiler.send('Performance.enable')
+    const heap = async () => {
+      await profiler.send('HeapProfiler.collectGarbage')
+      return (await profiler.send('Performance.getMetrics')).metrics.find((x) => x.name === 'JSHeapUsedSize').value
+    }
+    await page.locator('#interp:not([hidden])').waitFor()
+    const baseline = await heap()
+    for (let i = 0; i < 80; i++) {
+      const expression = evictionMode ? `target_${i}.go()` : `helper.target_${i}()`
+      const line = documentText.split('\n').findIndex((line) => line === expression)
+      await go(line + 1, 1)
+      await page.mouse.move(1, 1)
+      const before = calls.length
+      await page.keyboard.down('Control')
+      await page.locator('.view-lines .view-line').filter({ hasText: expression }).getByText(evictionMode ? 'go' : `target_${i}`, { exact: true }).hover()
+      for (let wait = 0; wait < 100 && !calls.slice(before).some((c) => c.name === 'lsp.peek' && c.result); wait++) await page.waitForTimeout(20)
+      await page.locator('.goto-definition-link').first().waitFor({ state: 'visible' })
+      await page.keyboard.up('Control')
+      if ((i + 1) % 20 === 0) console.log(JSON.stringify({ previews: i + 1, retainedMiB: Math.round(((await heap()) - baseline) / 1048576) }))
+    }
+    await page.mouse.move(1, 1)
+    await page.waitForTimeout(200)
+    const retained = (await heap()) - baseline
+    assert(retained < 16 * 1048576, `80 distinct previews retained ${(retained / 1048576).toFixed(1)} MiB; preview storage must remain bounded`)
+    if (evictionMode) {
+      const line = documentText.split('\n').findIndex((line) => line === 'target_0.go()')
+      await go(line + 1, 11)
+      await page.keyboard.press('F12')
+      for (let i = 0; i < 100 && !reveals.length; i++) await page.waitForTimeout(20)
+      assert(reveals.some((r) => r.path.endsWith('target_0.py') && r.line === 1), 'a previously evicted target must still open correctly')
+      console.log('PASS preview eviction: navigation can return to an older target')
+    }
+    console.log('PASS sustained navigation: preview memory remains bounded')
+  } else if (realFile) {
     await page.locator('#interp:not([hidden])').waitFor({ timeout: 15000 })
     const word = process.env.QT_LSP_UI_SYMBOL
     assert(word && process.env.QT_LSP_UI_ROOT && process.env.QT_LSP_TEST_PYTHON, 'real-file mode needs UI_ROOT, UI_SYMBOL and TEST_PYTHON')

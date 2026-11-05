@@ -169,6 +169,9 @@ Set `QT_LSP_BROWSER` to the browser executable when it is not in a standard loca
 `npm run test:ui:large` additionally checks a 2,400-line file, repeated Ctrl+Click,
 the real 64 KiB request limit, edits during initialization/uploads, large Unicode
 pastes and recovery from transient request throttling.
+`npm run test:ui:stress` repeats 80 previews in one large target and across 80
+different files, collects garbage, checks retained JavaScript heap, and verifies
+that navigation still works after older previews are evicted.
 For latency investigations, `lsp-build/dev/perf-worker.ps1 -Path <python-file>
 -Words @('symbol')` measures real worker definition/hover requests, including CLI
 overhead. The first query in a large PySide6 project can take several seconds while

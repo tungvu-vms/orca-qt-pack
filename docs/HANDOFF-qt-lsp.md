@@ -56,6 +56,17 @@ Read `README.md` first (install, settings, SSH, security). This file is the work
   QT_LSP_UI_SYMBOL and QT_LSP_TEST_PYTHON, reading source without writing it. Its Ctrl+Click
   metric ends at the reveal callback, before actual Orca tab opening. On the VMS file,
   measured first cold click ~7.5 s, subsequent clicks ~95 ms; do not claim instant cold startup.
+- Sustained-navigation regression: per-target-line Monaco model URIs retained a
+  fresh copy of a large preview at each Ctrl-hover, growing from ~9 to ~28 MiB
+  after 20 to 80 targets even after GC. Preview URIs now identify actual returned
+  windows/full files. LRU bounds idle models to six / 4 MiB text storage, with live
+  model references pinned and evicted targets rehydrated through the resolver.
+  Stress checks retained ~4 MiB for 80 symbols in one large file and ~5 MiB across
+  80 large target files. These are isolated editor heap measurements, not proof
+  that every cause of whole-app lag is fixed. `npm run test:ui:stress` guards both.
+  `monaco-workarounds.mjs` also releases a model reference that arrives after a
+  reference group was closed, and duplicates from concurrent group resolution.
+  The resolver pins models before asynchronous acquisition to prevent eviction races.
 
 ## Research follow-up: VS Code responsiveness (not implemented)
 
