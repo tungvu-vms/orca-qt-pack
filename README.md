@@ -1,40 +1,51 @@
-# Qt Developer Pack for Orca
+# Developer Tools for Orca
 
 Qt, QML, PySide6 and C++ development tools for [Orca](https://github.com/stablyai/orca).
 
-| Plugin | Features |
+| Plugin | Install for |
 | --- | --- |
-| **Qt Developer Syntax** | Highlighting for Qt project files, QSS, Designer forms, resources, qmake and CMake. |
-| **Qt Developer Icons** | Qt and Material file/folder icons, with light and dark themes. |
-| **Qt Developer Tools** | Designer, UI/resource compilation, QML lint/format, translations and CMake build commands. |
-| **Qt Code Intelligence** | Python/QML/C++ definitions, references, hover, completion, diagnostics and semantic colors. |
+| **Python Code Intelligence** | Python backend, scripts, automation, PySide6/PyQt; uses basedpyright. |
+| **C/C++ Code Intelligence** | Native C/C++ projects using clangd; Qt and CMake are optional. |
+| **QML Code Intelligence** | Qt Quick projects using qmlls. |
+| **Qt Developer Tools** | Designer, UI/resource compilation, QML tools, translations and Qt builds. |
+| **Qt Developer Syntax** | Qt project files, QSS, Designer forms, qmake and CMake highlighting. |
+| **Qt Developer Icons** | Optional Qt and Material icons, with light/dark themes. |
 
-## Install
+## Install only what you need
 
-1. Use **Orca 1.4.248+** and enable plugins in **Settings → Plugins**.
-2. Choose **Add plugin → Catalog** and enter:
+Use **Orca 1.4.248+** with plugins enabled. The three independent language plugins
+are development builds (**0.1.0**); they have not been published to the catalog yet.
+The catalog on `main` still provides the combined **Qt Code Intelligence 0.5.0**.
 
-   ```text
-   URL: https://github.com/tungvu-vms/orca-qt-pack.git
-   Ref: main
-   ```
+To try the independent plugins:
 
-3. Install the plugins you need. Qt Tools and Code Intelligence require approval to run code.
-4. Select **Qt Developer Icons** in **Settings → Appearance → Icon theme**.
+```sh
+git clone --branch tungvu-vms/qt-lsp-codex https://github.com/tungvu-vms/orca-qt-pack.git
+cd orca-qt-pack
+```
+
+Disable the old **Qt Code Intelligence (Python, QML, C++)** in Orca first, then load
+only the folders you want. Each runs independently and requires approval:
+
+| Language | Load from the repository root |
+| --- | --- |
+| Python | `orca plugin dev load plugins/python-lsp` |
+| C/C++ | `orca plugin dev load plugins/cpp-lsp` |
+| QML | `orca plugin dev load plugins/qml-lsp` |
+
+These are development folders, so keep the checkout in place. See the
+[migration guide](docs/MIGRATION.md) for settings and the legacy plugin.
+
+Optional Qt Tools, Syntax and Icons are available from **Settings → Plugins →
+Add plugin → Catalog**, URL `https://github.com/tungvu-vms/orca-qt-pack.git`, ref `main`.
+Choose the icon theme in **Settings → Appearance → Icon theme**. A Python backend
+or non-Qt C++ project needs none of the Qt plugins.
 
 Choose your workflow: [Python / PySide6](#python--pyside6) · [C++](#c) · [Qt / QML](#qt--qml).
 
-**Release status:** the catalog currently publishes Code Intelligence **0.5.0**.
-The latest editing/navigation fixes and automatic LSP views are development-only.
-To try this checkout:
-
-```sh
-orca plugin dev load plugins/qt-lsp
-```
-
 ## Navigation and editing
 
-Select the language's **LSP** view if a tab uses Source. Development editor shortcuts:
+Select the language's **LSP** view if a tab uses Source. Shortcuts in the independent language editors:
 
 | Action | Shortcut |
 | --- | --- |
@@ -60,8 +71,7 @@ basedpyright installs automatically on first use.
    types, select one with **PySide6** or the PyQt binding your project uses installed.
 3. Use **F1 → Python: Toggle Diagnostics** to hide or show Python warnings.
 
-For Designer and UI/resource compilation, choose your Python binding in **Qt Tools** settings.
-On Windows, [install-prereqs.ps1](setup/install-prereqs.ps1) checks tools and installs basedpyright.
+For Designer and UI/resource compilation, optionally install **Qt Tools** and choose your Python binding.
 
 ## C++
 
@@ -69,9 +79,11 @@ On Windows, [install-prereqs.ps1](setup/install-prereqs.ps1) checks tools and in
 
 1. Configure CMake with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to generate `compile_commands.json`.
 2. Open source/header files in **C++ (LSP)** for definitions, hover and completion.
-3. Restart clangd using the status-bar button after configuring or changing build settings.
+3. For external/custom build layouts, set **Compilation database folder**. Restart clangd after build configuration changes.
 
-The **Qt Tools** panel provides CMake configure/build commands for Qt projects.
+Meson, Make/Bear and other build systems can also supply the database; `.clangd` and
+`compile_flags.txt` are supported by clangd. Optional [C/C++ & CMake Kit](https://github.com/be0hhh/orca-cpp-kit)
+adds regular-editor syntax for template/module files and CMake; it does not replace clangd.
 
 ## Qt / QML
 

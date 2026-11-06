@@ -10,12 +10,12 @@ export type Lang = 'python' | 'qml' | 'cpp'
 export const LANG_OF_EXT: Record<string, Lang> = {
   '.py': 'python', '.pyi': 'python', '.pyw': 'python',
   '.qml': 'qml',
-  '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.c++': 'cpp', '.c': 'cpp', '.h': 'cpp', '.hpp': 'cpp', '.hh': 'cpp', '.hxx': 'cpp', '.inl': 'cpp', '.ipp': 'cpp'
+  '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.c++': 'cpp', '.c': 'cpp', '.h': 'cpp', '.hpp': 'cpp', '.hh': 'cpp', '.hxx': 'cpp', '.inl': 'cpp', '.ipp': 'cpp', '.tpp': 'cpp', '.tcc': 'cpp', '.ixx': 'cpp', '.cppm': 'cpp'
 }
 export const EXTS_OF_LANG: Record<Lang, RegExp> = {
   python: /\.(py|pyi|pyw)$/i,
   qml: /\.qml$/i,
-  cpp: /\.(cpp|cc|cxx|c\+\+|c|h|hpp|hh|hxx|inl|ipp)$/i
+  cpp: /\.(cpp|cc|cxx|c\+\+|c|h|hpp|hh|hxx|inl|ipp|tpp|tcc|ixx|cppm)$/i
 }
 export const LANGUAGE_ID: Record<Lang, (path: string) => string> = {
   python: () => 'python',
@@ -59,17 +59,19 @@ export function findQmlls(configured: string, qtBin: string): string | null {
   return firstExisting([...qtBinDirs(qtBin).map((d) => join(d, exe('qmlls'))), ...pathDirs().map((d) => join(d, exe('qmlls')))])
 }
 
-/** clangd: setting > Qt Creator > LLVM > PATH > VS Code clangd extension. */
+/** clangd: explicit setting > PATH > known LLVM/Qt Creator installations. */
 export function findClangd(configured: string): string | null {
-  if (configured && existsSync(configured)) return configured
-  const c: string[] = []
+  if (configured) {
+    if (!existsSync(configured) || !statSync(configured).isFile()) throw new Error(`Configured clangd was not found: ${configured}`)
+    return configured
+  }
+  const c: string[] = pathDirs().map((d) => join(d, exe('clangd')))
   if (WIN) {
     for (const root of ['C:\\Qt', join(home(), 'Qt')]) c.push(join(root, 'Tools', 'QtCreator', 'bin', 'clang', 'bin', 'clangd.exe'))
     c.push('C:\\Program Files\\LLVM\\bin\\clangd.exe')
   } else {
     c.push('/Applications/Qt Creator.app/Contents/Resources/libexec/clang/bin/clangd', join(home(), 'Qt', 'Tools', 'QtCreator', 'libexec', 'qtcreator', 'clang', 'bin', 'clangd'), '/usr/bin/clangd', '/usr/local/bin/clangd', '/opt/homebrew/opt/llvm/bin/clangd')
   }
-  c.push(...pathDirs().map((d) => join(d, exe('clangd'))))
   try {
     const vsc = join(home(), '.vscode', 'extensions')
     for (const d of readdirSync(vsc).filter((n) => n.startsWith('llvm-vs-code-extensions.vscode-clangd'))) {
@@ -108,6 +110,14 @@ export function findBuildDirs(root: string, want: 'compile_commands' | 'qml'): s
     try { for (const s of readdirSync(d)) { const sd = join(d, s); try { if (statSync(sd).isDirectory()) check(sd) } catch { /* */ } } } catch { /* */ }
   }
   return hits.sort((a, b) => b.mtime - a.mtime).map((h) => h.dir)
+}
+
+/** A configured database can live outside a CMake-style build directory. */
+export function compilationDatabaseDir(root: string, configured: string): string | null {
+  if (!configured.trim()) return findBuildDirs(root, 'compile_commands')[0] ?? null
+  const folder = resolve(root, configured.trim()), file = join(folder, 'compile_commands.json')
+  if (!existsSync(file) || !statSync(file).isFile()) throw new Error(`Compilation database missing: ${file}`)
+  return folder
 }
 
 const PROJECT_MARKERS: Record<Lang, string[]> = {

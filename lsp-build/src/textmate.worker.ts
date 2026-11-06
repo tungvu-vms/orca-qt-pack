@@ -3,15 +3,22 @@ import { INITIAL, Registry, parseRawGrammar, type IGrammar, type StateStack } fr
 import { createOnigScanner, createOnigString, loadWASM } from 'vscode-oniguruma'
 import wasmBase64 from 'vscode-oniguruma/release/onig.wasm'
 import { allSelectors, bestSelector } from './textmate-theme'
+declare const __LSP_LANGUAGE__: 'all' | 'python' | 'cpp' | 'qml'
 
 const loaders: Record<string, () => Promise<{ default: unknown }>> = {
+  ...((typeof __LSP_LANGUAGE__ === 'undefined' || __LSP_LANGUAGE__ === 'all' || __LSP_LANGUAGE__ === 'python') ? {
   'source.python': () => import('../vendor/MagicPython.tmLanguage.json'),
   'source.regexp.python': () => import('../vendor/MagicRegExp.tmLanguage.json'),
+  } : {}),
+  ...((typeof __LSP_LANGUAGE__ === 'undefined' || __LSP_LANGUAGE__ === 'all' || __LSP_LANGUAGE__ === 'qml') ? {
   'source.qml': () => import('../vendor/qml.tmLanguage.json'),
   'source.js': () => import('../vendor/javascript.tmLanguage.json'),
+  } : {}),
+  ...((typeof __LSP_LANGUAGE__ === 'undefined' || __LSP_LANGUAGE__ === 'all' || __LSP_LANGUAGE__ === 'cpp') ? {
   'source.cpp': () => import('../vendor/cpp.tmLanguage.json'),
   'source.cpp.embedded.macro': () => import('../vendor/cpp.embedded.macro.tmLanguage.json'),
   'source.c': () => import('../vendor/c.tmLanguage.json')
+  } : {})
 }
 const ready = (async () => {
   const data = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0))

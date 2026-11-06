@@ -16,8 +16,7 @@ import 'monaco-editor/esm/vs/editor/contrib/linesOperations/browser/linesOperati
 import 'monaco-editor/esm/vs/editor/contrib/gotoError/browser/gotoError.js'
 import 'monaco-editor/esm/vs/editor/contrib/peekView/browser/peekView.js'
 import 'monaco-editor/esm/vs/editor/contrib/gotoSymbol/browser/peek/referencesController.js'
-import 'monaco-editor/esm/vs/basic-languages/python/python.contribution.js'
-import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution.js'
+import { loadLanguageFallbacks } from './editor-language'
 import { installTextMate, semanticToken, textMateRules, type Lang } from './textmate'
 import { StandaloneServices } from 'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'
 import { IConfigurationService } from 'monaco-editor/esm/vs/platform/configuration/common/configuration.js'
@@ -155,6 +154,7 @@ function applyTheme() {
 }
 
 async function main() {
+  await loadLanguageFallbacks()
   // TextMate grammar + Dark+/Light+ theme (as in VS Code); on failure keep Monaco's built-in tokenizer.
   if (!orca.document) throw new Error('Open a Python, QML or C++ file in this editor.')
   const session = await orca.document.session<string>({ debounceMs: 300 })

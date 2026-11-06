@@ -1,9 +1,9 @@
 # Exercises the development worker through Orca's real frame bridge.
 # Usage: pwsh -File lsp-build/dev/e2e-worker.ps1 [-RequirePySide6]
-param([switch]$RequirePySide6)
+param([switch]$RequirePySide6, [string]$PluginKey = 'local.python-code-intelligence')
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot\..\..").Path
-$key = 'local.qt-dev-python-lsp'
+$key = $PluginKey
 $out = Join-Path $env:TEMP 'lsp-e2e.txt'
 $orcaCli = if ($env:ORCA_CLI_COMMAND) { $env:ORCA_CLI_COMMAND } else { 'orca' }
 '' | Set-Content $out

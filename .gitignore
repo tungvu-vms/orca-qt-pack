@@ -3,6 +3,7 @@ _ref/
 _scratch/
 lsp-build/dist-test/
 lsp-build/meta.json
+lsp-build/meta-*.json
 lsp-build/node_modules/
 node_modules/
 samples/**/*_rc.py

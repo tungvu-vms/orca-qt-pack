@@ -8,15 +8,17 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { LspClient } from './lsp-client'
-import { installPyright } from './pyright-install'
+import { serverCommand } from './language-adapters'
+declare const __LSP_LANGUAGE__: Lang | 'all'
 import { discoverInterpreters, type Interpreter } from './interpreters'
-import { EXTS_OF_LANG, LANGUAGE_ID, SERVER_LABEL, findBuildDirs, findClangd, findQmlls, projectRootFor, type Lang } from './servers'
+import { EXTS_OF_LANG, LANGUAGE_ID, SERVER_LABEL, projectRootFor, type Lang } from './servers'
 import type {
   AttachInput, AttachOutput, CompletionOutput, DefinitionOutput, DiagnosticsOutput, DocInput, HoverOutput, Loc, PosInput,
   ReferencesOutput, SignatureHelpOutput, DocumentSymbolsOutput, DocumentSymbol, DocumentHighlightsOutput, PrepareRenameOutput, RenameOutput, SourceEdit
 } from './protocol'
 import { jsonBytes, messageBytes, limitItems, POST_BUDGET, RESPONSE_BUDGET } from './transport'
 import { DOCUMENT_READ_METHODS } from './protocol'
+import { assertSupportedInput, languageOfPath, LANGUAGE_PROFILE } from './language-profile'
 
 const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', 'env', 'dist', '.orca', '.mypy_cache', '.pytest_cache', 'site-packages', '.cache', '.qtc_clangd',
   // workspace is the home folder (e.g. /Users/<name>): skip large system/media folders
@@ -46,7 +48,7 @@ interface Server {
 
 const norm = (p: string) => (WIN ? p.toLowerCase() : p)
 const key = (lang: Lang, root: string) => `${lang}|${norm(root)}`
-const langOfPath = (p: string): Lang | null => (EXTS_OF_LANG.python.test(p) ? 'python' : EXTS_OF_LANG.qml.test(p) ? 'qml' : EXTS_OF_LANG.cpp.test(p) ? 'cpp' : null)
+const langOfPath = languageOfPath
 
 export type Handler = (input: any) => Promise<any>
 export interface CoreEnv {
@@ -73,6 +75,7 @@ export function createCore(host: CoreEnv): Core {
   // Orca rejects undefined object properties even though JSON.stringify omits them.
   // Keep the shared RPC boundary identical for in-process tests and the SSH agent.
   const handle = (name: string, fn: Handler) => { handlers[name] = async (input) => {
+    assertSupportedInput(name, input)
     if (DOCUMENT_READ_METHODS.has(name) && Number.isInteger(input?.version)) {
       const lang = langOfPath(input.path)
       const server = lang ? serverOf(lang, input.path) : null
@@ -115,7 +118,7 @@ export function createCore(host: CoreEnv): Core {
         for (const e of ents) {
           const n = e.name
           if (e.isDirectory()) { if (!skipDir(n)) next.push(join(dir, n)); continue }
-          if (!e.isFile() || !langOfPath(n)) continue
+          if (!e.isFile() || !langOfPath(n) || (LANGUAGE_PROFILE !== 'all' && langOfPath(n) !== LANGUAGE_PROFILE)) continue
           const full = join(dir, n)
           let size: number
           try { size = statSync(full).size } catch { continue }
@@ -155,68 +158,10 @@ export function createCore(host: CoreEnv): Core {
     try { const v = await host.storageGet(SAVED_KEY); return v && typeof v === 'object' ? (v as Record<string, string>) : {} } catch { return {} }
   }
   async function interpretersFor(root: string, file?: string): Promise<Interpreter[]> {
+    if (typeof __LSP_LANGUAGE__ !== 'undefined' && __LSP_LANGUAGE__ !== 'all' && __LSP_LANGUAGE__ !== 'python') return []
     const saved = (await savedInterpreters())[norm(root)]
     const projectEnvs = String(await setting('projectEnvironments', 'on')).trim().toLowerCase() !== 'off'
     return discoverInterpreters(file ?? join(root, '__init__.py'), root, { saved, setting: await setting('python', ''), projectEnvs })
-  }
-
-  // ---------- Locate programs ----------
-  function findNode(): string {
-    const exe = WIN ? 'node.exe' : 'node'
-    for (const dir of (process.env.PATH ?? process.env.Path ?? '').split(WIN ? ';' : ':')) if (dir && existsSync(join(dir, exe))) return join(dir, exe)
-    for (const c of WIN ? ['C:\\Program Files\\nodejs\\node.exe'] : ['/usr/local/bin/node', '/opt/homebrew/bin/node', '/usr/bin/node']) if (existsSync(c)) return c
-    return process.execPath
-  }
-  /** Where basedpyright is auto-installed on this machine: %LOCALAPPDATA%orca-qt-lsp (Windows), ~/.local/share/orca-qt-lsp (macOS/Linux). */
-  function pyrightPrefix(): string {
-    const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir()
-    return join(process.env.LOCALAPPDATA ?? (WIN ? join(h, 'AppData', 'Local') : join(h, '.local', 'share')), 'orca-qt-lsp')
-  }
-  function pyrightEntry(): string | null {
-    const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir()
-    const local = process.env.LOCALAPPDATA ?? (WIN ? join(h, 'AppData', 'Local') : join(h, '.local', 'share'))
-    const appData = process.env.APPDATA ?? (WIN ? join(h, 'AppData', 'Roaming') : undefined)
-    const c = [join(pluginDir(), 'server', 'pyright', 'langserver.index.js'), join(local, 'orca-qt-lsp', 'node_modules', 'basedpyright', 'langserver.index.js')]
-    if (appData) c.push(join(appData, 'npm', 'node_modules', 'basedpyright', 'langserver.index.js'), join(appData, 'npm', 'node_modules', 'pyright', 'langserver.index.js'))
-    for (const p of ['/usr/local', '/opt/homebrew', join(h, '.npm-global')]) c.push(join(p, 'lib', 'node_modules', 'basedpyright', 'langserver.index.js'), join(p, 'lib', 'node_modules', 'pyright', 'langserver.index.js'))
-    return c.find((p) => existsSync(p)) ?? null
-  }
-
-  /** Command that runs the server for (lang, root). Throws (shown in the status bar) when the program is missing. */
-  async function commandFor(lang: Lang, root: string): Promise<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv; detail: string }> {
-    if (lang === 'python') {
-      const entry = (await setting('pyrightPath', '')) || pyrightEntry() || await (host.installPyright ? host.installPyright() : installPyright(pyrightPrefix(), findNode(), host.log))
-      if (!entry) throw new Error(`basedpyright/Pyright not found on this ${process.platform} machine. Install it (needs Node.js 18+ with npm): npm i --prefix ${WIN ? '"%LOCALAPPDATA%\\orca-qt-lsp"' : '~/.local/share/orca-qt-lsp'} basedpyright@1.40.2`)
-      const node = (await setting('nodePath', '')) || findNode()
-      return { cmd: node, args: [entry, '--stdio'], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, detail: entry.includes('basedpyright') ? 'basedpyright' : 'pyright' }
-    }
-    if (lang === 'qml') {
-      const qmlls = findQmlls(await setting('qmllsPath', ''), await setting('qtBin', ''))
-      if (!qmlls) throw new Error('qmlls (Qt 6.4+) not found. Set "qmlls path" or "Qt bin folder" in the plugin Settings.')
-      const args: string[] = []
-      const builds = findBuildDirs(root, 'qml')
-      for (const b of builds.slice(0, 1)) args.push('-b', b)
-      // Qt's QML module folder next to qmlls (when qmlls lives outside the kit's bin)
-      const qmlDir = join(dirname(dirname(qmlls)), 'qml')
-      if (existsSync(qmlDir)) args.push('-I', qmlDir)
-      return { cmd: qmlls, args, detail: builds[0] ? `build: ${builds[0].slice(root.length + 1) || '.'}` : 'no build folder yet (run CMake configure so qmlls can see the project modules)' }
-    }
-    const clangd = findClangd(await setting('clangdPath', ''))
-    if (!clangd) throw new Error('clangd not found. Install LLVM or Qt Creator, or set "clangd path" in Settings.')
-    const args = ['--background-index', '--clang-tidy=false', '--header-insertion=never', '--completion-style=detailed', '--log=error', '--pch-storage=memory']
-    const cc = findBuildDirs(root, 'compile_commands')
-    if (cc[0]) args.push(`--compile-commands-dir=${cc[0]}`)
-    // clangd runs the compiler named in compile_commands.json to read its system include paths. Allow only
-    // compilers from toolchain install folders, never one inside the opened project (a cloned repo could
-    // point compile_commands.json at its own "compiler").
-    const drivers = WIN
-      ? ['C:/Qt/Tools/**/bin/*.exe', 'C:/Program Files/LLVM/bin/*.exe', 'C:/Program Files/Microsoft Visual Studio/**/bin/**/cl.exe',
-          'C:/Program Files (x86)/Microsoft Visual Studio/**/bin/**/cl.exe', 'C:/msys64/*/bin/*.exe', 'C:/mingw*/bin/*.exe']
-      : ['/usr/bin/*', '/usr/local/bin/*', '/opt/homebrew/bin/*', '/opt/homebrew/opt/llvm/bin/*', '/Library/Developer/CommandLineTools/usr/bin/*',
-          '/Applications/Xcode*.app/Contents/Developer/Toolchains/**/bin/*', `${homedir()}/Qt/Tools/**/bin/*`]
-    const extra = String(await setting('compilerGlobs', '')).split(/[;,\n]/).map((x) => x.trim()).filter(Boolean)
-    args.push(`--query-driver=${[...drivers, ...extra].join(',')}`)
-    return { cmd: clangd, args, detail: cc[0] ? `compile_commands: ${cc[0].slice(root.length + 1) || '.'}` : 'no compile_commands.json yet (run CMake configure with CMAKE_EXPORT_COMPILE_COMMANDS=ON)' }
   }
 
   // ---------- Server ----------
@@ -231,7 +176,7 @@ export function createCore(host: CoreEnv): Core {
     try { return await startup } finally { if (starting.get(id) === startup) starting.delete(id) }
   }
   async function startServer(lang: Lang, root: string, file?: string): Promise<Server> {
-    const { cmd, args, env, detail } = await commandFor(lang, root)
+    const { cmd, args, env, detail } = await serverCommand(lang, root, { setting, pluginDir, log: host.log, installPyright: host.installPyright })
     host.log(`spawn ${lang}: ${cmd} ${args.join(' ')} (root ${root})`)
     const client = new LspClient(cmd, args, lang === 'python' ? pluginDir() : root, env, { fileCancellation: lang === 'python' })
     client.log = (l) => host.log(`[${lang}] ${l}`)

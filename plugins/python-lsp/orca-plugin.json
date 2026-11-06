@@ -1,0 +1,132 @@
+{
+  "manifestVersion": 2,
+  "id": "python-code-intelligence",
+  "name": "Python Code Intelligence",
+  "version": "0.1.0",
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "description": "Python navigation and editing for backend, scripting and Qt projects: definitions, references, hover, completion and diagnostics through basedpyright. Qt is optional.",
+  "license": "MIT",
+  "author": {
+    "name": "Tùng Vũ"
+  },
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "main": "worker/worker.mjs",
+  "contributes": {
+    "events": [
+      {
+        "on": "workspace.removed"
+      }
+    ],
+    "customEditors": [
+      {
+        "id": "python-lsp",
+        "title": "Python (LSP)",
+        "extensions": [
+          ".py",
+          ".pyi",
+          ".pyw"
+        ],
+        "entry": "editor/python.html",
+        "priority": "default",
+        "contentKind": "text",
+        "frame": "isolated"
+      }
+    ],
+    "settings": [
+      {
+        "key": "python",
+        "title": "Python interpreter",
+        "description": "Force one interpreter for every project. Empty (recommended): pick per project like VS Code (.vscode setting, project venv with the highest Python, then the highest installed Python).",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "typeCheckingMode",
+        "title": "Python type checking",
+        "description": "How strictly Pyright checks types: off (default, like VS Code's Pylance: only syntax and unresolved imports), basic, standard, strict. Takes effect after restarting the language server.",
+        "type": "string",
+        "default": "off"
+      },
+      {
+        "key": "pythonDiagnostics",
+        "title": "Show Python diagnostics",
+        "description": "Show Python error underlines and diagnostic messages. Turn off for a quiet editor while keeping completion, hover and navigation. Also available in the editor's F1 menu as Python: Toggle Diagnostics.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "projectEnvironments",
+        "title": "Use project environments",
+        "description": "on (default): pick the project's own venv / conda env, .vscode/settings.json and pyrightconfig like VS Code. Pyright then runs that environment's python to read its library paths, so only open projects you trust. off: use installed Pythons only.",
+        "type": "string",
+        "default": "on"
+      },
+      {
+        "key": "pyrightPath",
+        "title": "Pyright language server",
+        "description": "Path to basedpyright's or pyright's langserver.index.js. Empty: %LOCALAPPDATA%\\orca-qt-lsp, then the global npm folder.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "nodePath",
+        "title": "Node.js",
+        "description": "Node used to run Pyright. Empty: node on PATH.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "remoteHosts",
+        "title": "Extra SSH hosts",
+        "description": "Usually empty: when the open file is not on this machine the plugin searches every host in ~/.ssh/config by itself (read-only, in parallel) and remembers the one that has the project. Use the machine button at the bottom of the editor to pick or type a host for a project. Add hosts here only if they are not in ~/.ssh/config (user@host), separated by commas.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "autoFindRemote",
+        "title": "Find files on SSH hosts automatically",
+        "description": "on (default): when the open file is not on this machine, look for it read-only on every host in ~/.ssh/config (key login only, at most 40 hosts, files of 64 bytes or more) and start the agent on the host that has it. off: only use the host picked with the machine button.",
+        "type": "string",
+        "default": "on"
+      },
+      {
+        "key": "remoteRoots",
+        "title": "Remote project folders",
+        "description": "Optional: project folders on the remote hosts to search (separate with ;). Searched anyway: folders used before, Orca's workspaces on that host (when Orca is installed there), then the home folder.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "sshPath",
+        "title": "ssh",
+        "description": "Path to the ssh program. Empty: the system OpenSSH.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "remoteNode",
+        "title": "Remote node path",
+        "description": "Optional: Node.js on the remote hosts when it is not on the SSH PATH (e.g. /home/me/.nvm/versions/node/v20.11.0/bin/node).",
+        "type": "string",
+        "default": ""
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    },
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "storage:own"
+    }
+  ]
+}

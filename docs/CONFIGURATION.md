@@ -5,8 +5,14 @@
 **Qt Developer Tools:** Qt bin folder, Python binding (PySide6/PyQt6/PyQt5/C++), Python interpreter, format QML on save,
 CMake generator and build type.
 
-**Qt Code Intelligence:** Python interpreter, Python type checking, use project environments, basedpyright / Pyright path,
-Node.js, Qt bin folder, qmlls, clangd, extra compiler globs for clangd, SSH options. Empty means "find it".
+**Python:** interpreter, type checking, project environments, diagnostics, basedpyright/Pyright and Node.js paths.
+
+**C/C++:** clangd path, compilation database folder and extra compiler globs.
+
+**QML:** Qt bin folder and qmlls path.
+
+Each language plugin has its own SSH/host options. Empty tool paths mean auto-discovery;
+explicit invalid clangd/database paths produce errors. See [migration](MIGRATION.md) for the old combined plugin.
 
 The Python interpreter is picked in VS Code's order: your choice for the project → `.vscode/settings.json` →
 `pyrightconfig.json` / `pyproject.toml` → the project's venv (one directly in the project first, then the highest Python

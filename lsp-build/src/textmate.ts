@@ -2,22 +2,25 @@
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js'
 import { allSelectors, bestSelector, selectorsByMode } from './textmate-theme'
 import { installWorkerTokens } from './textmate-background'
+declare const __LSP_LANGUAGE__: 'all' | 'python' | 'cpp' | 'qml'
 export type Lang = 'python' | 'qml' | 'cpp'
 type Loader = () => Promise<{ default: unknown }>
-const LANGS: Record<Lang, { scope: string; config: Loader }> = {
-  python: { scope: 'source.python', config: () => import('../vendor/python-language-configuration.json') },
-  qml: { scope: 'source.qml', config: () => import('../vendor/qml-configuration.json') },
-  cpp: { scope: 'source.cpp', config: () => import('../vendor/cpp-language-configuration.json') }
+const LANGS: Partial<Record<Lang, { scope: string; config: Loader }>> = {
+  ...((typeof __LSP_LANGUAGE__ === 'undefined' || __LSP_LANGUAGE__ === 'all' || __LSP_LANGUAGE__ === 'python') ? {python: { scope: 'source.python', config: () => import('../vendor/python-language-configuration.json') }} : {}),
+  ...((typeof __LSP_LANGUAGE__ === 'undefined' || __LSP_LANGUAGE__ === 'all' || __LSP_LANGUAGE__ === 'qml') ? {qml: { scope: 'source.qml', config: () => import('../vendor/qml-configuration.json') }} : {}),
+  ...((typeof __LSP_LANGUAGE__ === 'undefined' || __LSP_LANGUAGE__ === 'all' || __LSP_LANGUAGE__ === 'cpp') ? {cpp: { scope: 'source.cpp', config: () => import('../vendor/cpp-language-configuration.json') }} : {})
 }
 
 
 const installed = new Map<Lang, Promise<boolean>>()
 export function installTextMate(lang: Lang): Promise<boolean> {
+  const definition = LANGS[lang]
+  if (!definition) return Promise.resolve(false)
   let pending = installed.get(lang)
   if (!pending) {
     pending = (async () => {
       if (!monaco.languages.getLanguages().some(l => l.id === lang)) monaco.languages.register({ id: lang })
-      monaco.languages.setLanguageConfiguration(lang, toMonacoConfig((await LANGS[lang].config()).default))
+      monaco.languages.setLanguageConfiguration(lang, toMonacoConfig((await definition.config()).default))
       return installWorkerTokens(lang)
     })().catch(error => { console.warn('[qt-lsp] textmate unavailable', error); return false }).finally(() => installed.delete(lang))
     installed.set(lang, pending)

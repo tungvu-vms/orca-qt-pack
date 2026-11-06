@@ -1,7 +1,7 @@
 # Tests the real LSP worker in Orca for QML (qmlls) and C++ (clangd) on samples/qt-quick-app.
 # Usage: pwsh lsp-build/dev/e2e-qt.ps1   (load the dev plugin; uses the checked-in sample; output in %TEMP%\lsp-e2e-qt.txt)
 $repo = Resolve-Path "$PSScriptRoot\..\.."
-$key = 'local.qt-dev-python-lsp'
+$key = ''
 $root = Join-Path $repo 'samples\qt-quick-app'
 $out = "$env:TEMP\lsp-e2e-qt.txt"
 '' | Set-Content $out
@@ -17,6 +17,7 @@ $cases = @(
   @{ lang = 'cpp'; file = 'backend.cpp'; probes = @(@{ w = 'increment'; l = 6 }, @{ w = 'm_count'; l = 8 }, @{ w = 'countChanged'; l = 9 }, @{ w = 'QStringLiteral'; l = 12 }) }
 )
 foreach ($c in $cases) {
+  $key = if ($c.lang -eq 'cpp') { 'local.cpp-code-intelligence' } else { 'local.qml-code-intelligence' }
   $p = Join-Path $root $c.file
   $text = [IO.File]::ReadAllText($p)
   $a = Req 'lsp.attach' @{ language = $c.lang; hash = (-join ([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($text.Replace("`r`n","`n"))) | % { $_.ToString('x2') })) }

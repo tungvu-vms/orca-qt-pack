@@ -44,7 +44,7 @@ if (evictionMode) {
 const documentText = evictionMode ? readFileSync(path, 'utf8') : text
 writeFileSync(join(project, 'pyrightconfig.json'), '{}')
 const out = join(scratch, 'core.mjs')
-await build({ entryPoints: ['src/core.ts'], outfile: out, bundle: true, platform: 'node', format: 'esm' })
+await build({ entryPoints: ['src/core.ts'], outfile: out, bundle: true, platform: 'node', format: 'esm', define: { __LSP_LANGUAGE__: '"python"' } })
 const { createCore } = await import(pathToFileURL(out))
 const config = { pyrightPath: resolve('node_modules/basedpyright/langserver.index.js'), nodePath: process.execPath, projectEnvironments: 'off' }
 if (realFile) { config.python = process.env.QT_LSP_TEST_PYTHON; config.projectEnvironments = 'on' }
@@ -57,7 +57,7 @@ const coreHost = { log() {}, post() {}, setting: async (k, fallback) => config[k
   reveal: async (path, line) => { reveals.push({ path, line }); return { opened: true, line } }
 }
 let core = createCore(coreHost)
-const assets = resolve('../plugins/qt-lsp/editor')
+const assets = resolve('../plugins/python-lsp/editor')
 const bridge = `<script>
 const listeners = new Map();
 const settingsListeners = new Set();

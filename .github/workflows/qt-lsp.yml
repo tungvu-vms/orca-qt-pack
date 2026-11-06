@@ -1,9 +1,9 @@
-name: Qt Code Intelligence
+name: Language Code Intelligence
 on:
   push:
-    paths: ['lsp-build/**', 'plugins/qt-lsp/**', 'types/orca/**', '.github/workflows/qt-lsp.yml']
+    paths: ['lsp-build/**', 'plugins/qt-lsp/**', 'plugins/python-lsp/**', 'plugins/cpp-lsp/**', 'plugins/qml-lsp/**', 'types/orca/**', '.github/workflows/qt-lsp.yml']
   pull_request:
-    paths: ['lsp-build/**', 'plugins/qt-lsp/**', 'types/orca/**', '.github/workflows/qt-lsp.yml']
+    paths: ['lsp-build/**', 'plugins/qt-lsp/**', 'plugins/python-lsp/**', 'plugins/cpp-lsp/**', 'plugins/qml-lsp/**', 'types/orca/**', '.github/workflows/qt-lsp.yml']
 permissions:
   contents: read
 jobs:
@@ -23,6 +23,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run check:build
+      - run: npm run test:packages
+      - run: npm run test:ui:languages
       - run: npm run test:ui
       - run: npm run test:ui:large
       - run: npm run test:ui:stress

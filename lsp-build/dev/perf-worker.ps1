@@ -2,7 +2,8 @@
 param(
   [Parameter(Mandatory)][string]$Path,
   [Parameter(Mandatory)][string[]]$Words,
-  [int]$Runs = 2
+  [int]$Runs = 2,
+  [string]$PluginKey = 'local.python-code-intelligence'
 )
 $ErrorActionPreference = 'Stop'
 $perfFile = (Resolve-Path -LiteralPath $Path).Path
@@ -19,7 +20,7 @@ for ($perfRun = 1; $perfRun -le $Runs; $perfRun++) {
     $perfData = @{ path = $perfFile; position = @{ line = $perfLine; character = $perfLines[$perfLine].IndexOf($perfWord) + 1 } } | ConvertTo-Json -Compress -Depth 5
     foreach ($perfMethod in @('lsp.definition', 'lsp.hover')) {
       $perfTimer = [Diagnostics.Stopwatch]::StartNew()
-      $perfReply = & $perfCli plugin dev request local.qt-dev-python-lsp $perfMethod --data $perfData --timeout-ms 30000 --json | ConvertFrom-Json
+      $perfReply = & $perfCli plugin dev request $PluginKey $perfMethod --data $perfData --timeout-ms 30000 --json | ConvertFrom-Json
       $perfResult = $perfReply.result.result
       $perfValid = $perfReply.ok -and $(if ($perfMethod -eq 'lsp.definition') { @($perfResult.locations | Where-Object path).Count -gt 0 } else { [bool]$perfResult.markdown })
       if (-not $perfValid) { $perfFailed = $true }

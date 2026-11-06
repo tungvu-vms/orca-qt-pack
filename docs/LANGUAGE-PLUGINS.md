@@ -1,6 +1,8 @@
 # Independently installable language plugins
 
-Status: design for review. The existing catalog and combined plugin are unchanged.
+Status: development implementation. The three independent folders are built and
+validated from shared source. The existing catalog and frozen combined plugin
+remain unchanged until a separate release decision.
 
 ## Intent and chosen approach
 
@@ -140,7 +142,7 @@ generator must not silently repin the legacy release to a newer unchanged versio
   for one package and all three. Compare with the combined baseline; structural
   isolation is required even if all-three installation uses more disk or RAM.
 
-## Execution sequence after design approval
+## Implementation sequence
 
 1. Introduce tested language adapters and request/state isolation in shared source.
 2. Build and validate the three independent manifests/assets/workers/agents.

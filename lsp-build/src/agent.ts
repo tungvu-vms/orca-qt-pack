@@ -10,8 +10,10 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { createCore } from './core'
 import { installPyright as installPyrightAt } from './pyright-install'
+import { LANGUAGE_PROFILE, PLUGIN_ID } from './language-profile'
 
 declare const __AGENT_VERSION__: string
+declare const __LSP_LANGUAGE__: 'all' | 'python' | 'cpp' | 'qml'
 export const AGENT_VERSION = __AGENT_VERSION__
 const HOME = join(homedir(), '.orca-qt-lsp')
 mkdirSync(HOME, { recursive: true })
@@ -21,7 +23,7 @@ const out = (o: unknown) => process.stdout.write(JSON.stringify(o) + '\n')
 const log = (m: string) => out({ log: m })
 
 let settings: Record<string, unknown> = {}
-const statePath = join(HOME, 'state.json')
+const statePath = join(HOME, LANGUAGE_PROFILE === 'all' ? 'state.json' : `state-${PLUGIN_ID}.json`)
 const readState = (): Record<string, unknown> => { try { return JSON.parse(readFileSync(statePath, 'utf8')) } catch { return {} } }
 
 /** Workspaces of an Orca installed on this host (if any): `orca worktree list --json`. Cached for 60 s. */
@@ -52,7 +54,7 @@ function rootsOf(hints?: string[]) {
   return { focused: list[0] ?? null, roots: [...new Set(list)] }
 }
 
-const installPyright = () => installPyrightAt(HOME, process.execPath, log)
+const installPyright = (typeof __LSP_LANGUAGE__ === 'undefined' || __LSP_LANGUAGE__ === 'all' || __LSP_LANGUAGE__ === 'python') ? () => installPyrightAt(HOME, process.execPath, log) : undefined
 
 const core = createCore({
   log,
@@ -65,17 +67,25 @@ const core = createCore({
 })
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
+let identified = LANGUAGE_PROFILE === 'all'
 rl.on('line', async (line) => {
   if (!line.trim()) return
   let msg: { id: number; m: string; p?: any }
   try { msg = JSON.parse(line) } catch { return }
   try {
     if (msg.m === '$hello') {
+      if (LANGUAGE_PROFILE !== 'all' && (msg.p?.language !== LANGUAGE_PROFILE || msg.p?.pluginId !== PLUGIN_ID)) throw new Error('Remote agent language/profile identity mismatch')
+      identified = true
       settings = msg.p?.settings ?? {}
-      out({ id: msg.id, r: { version: AGENT_VERSION, platform: process.platform, node: process.version, home: HOME } })
+      out({ id: msg.id, r: { version: AGENT_VERSION, platform: process.platform, node: process.version, home: HOME, language: LANGUAGE_PROFILE, pluginId: PLUGIN_ID } })
       return
     }
-    if (msg.m === '$roots') { for (const r of msg.p?.roots ?? []) usedRoots.add(r); return }
+    if (!identified) throw new Error('Remote agent identity handshake required')
+    if (msg.m === '$roots') {
+      for (const r of msg.p?.roots ?? []) if (typeof r === 'string') usedRoots.add(r)
+      const state = readState(); state.roots = [...usedRoots].slice(-30); writeFileSync(statePath, JSON.stringify(state))
+      out({ id: msg.id, r: null }); return
+    }
     const h = core.handlers[msg.m]
     if (!h) { out({ id: msg.id, e: `unknown method ${msg.m}` }); return }
     const r = await h(msg.p)

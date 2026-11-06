@@ -5,18 +5,26 @@ are on the development branch and need a separate versioned catalog release.
 See [CONTRIBUTING](../CONTRIBUTING.md) for repeatable builds and checks, and
 [public preparation](PUBLICATION.md) before changing repository visibility.
 
+## Independent language packages
+
+The shared source now builds `plugins/python-lsp`, `plugins/cpp-lsp` and
+`plugins/qml-lsp` (development version 0.1.0). Each registers one editor and has
+its own settings, worker and namespaced SSH state. `plugins/qt-lsp` is a frozen
+legacy bundle; the build never modifies it. See [migration](MIGRATION.md).
+
 ## Architecture
 
 `plugins/qt-lsp` = Orca plugin **Qt Code Intelligence** (`tungvu-vms.qt-dev-python-lsp`, v0.5.0).
 `trusted-worker` + three custom editors (`Python (LSP)`, `QML (LSP)`, `C++ (LSP)`, `priority: default`).
 The development editors now open supported Python/QML/C/C++ files by default; Source remains selectable.
-Source lives in `lsp-build/src`, built into `plugins/qt-lsp` by `cd lsp-build && npm ci && node build.mjs`.
+Source lives in `lsp-build/src`, built into the three language folders by `cd lsp-build && npm ci && node build.mjs`.
 
 | File | Role |
 | --- | --- |
-| `editor.ts` | Monaco frame: TextMate grammars (vscode-textmate + oniguruma WASM inlined), Dark+/Light+, semantic tokens, hover/definition/completion providers, status bar (⇄ host button, 🐍 interpreter / ⚙ restart) |
+| `editor.ts` | Shared Monaco frame: TextMate grammars (vscode-textmate + oniguruma WASM inlined), Dark+/Light+, semantic tokens, hover/definition/completion providers, status bar (⇄ host button, 🐍 interpreter / ⚙ restart) |
 | `worker.ts` | Orca worker entry: routes each request to the local core or to a remote agent over SSH; host auto-find; per-project host memory; `orca file open --line` for Ctrl+Click tabs |
 | `core.ts` | Language core used by worker and agent: workspace scan + attach by content hash, spawns basedpyright / qmlls / clangd, LSP plumbing |
+| `language-profile.ts`, `language-adapters.ts` | Build-time language scope, request rejection and language-specific server launch configuration |
 | `interpreters.ts` | VS Code-order interpreter discovery (saved → .vscode → pyrightconfig → project venv → highest global) |
 | `servers.ts` | qmlls / clangd discovery, build-dir search, project roots |
 | `remote.ts`, `agent.ts`, `probe-script.ts` | SSH: read-only probe on `~/.ssh/config` hosts, then copy `agent-<sha>.mjs` to `~/.orca-qt-lsp` on the host that has the file |
@@ -62,13 +70,13 @@ Maintain these controls in both local and SSH execution:
 ## Test and release
 
 - E2E against a running Orca (Windows): `lsp-build/dev/e2e-worker.ps1` and `e2e-qt.ps1`
-  (load the dev plugin first: `orca plugin dev load plugins/qt-lsp`; results in `%TEMP%\lsp-e2e*.txt`).
+  (disable the legacy plugin and load `plugins/python-lsp` first; results in `%TEMP%\lsp-e2e*.txt`).
   Remote: `node lsp-build/dev/remote-e2e.mjs <ssh-host> '<{hash,size,sizeCrlf}>' <line> <col>`.
 - Qt Tools: `orca plugin test plugins/qt-tools` (11 tests).
 - Type check worker+agent: tsc with `types/orca` mapped (see how `build.mjs` bundles; `npx tsc` per tsconfig).
 - Release: bump `version` in the plugin's `orca-plugin.json`, commit, then
   `node tools/build-catalog.mjs --url https://github.com/tungvu-vms/orca-qt-pack.git --owner tungvu-vms`,
-  commit `orca-catalog.json`, push. Installed copies update via Settings → Plugins → ↻ → Updates.
+  commit `orca-catalog.json`, push. Existing same-version entries retain their published pins; bump versions deliberately to release changes. Installed copies update via Settings → Plugins → ↻ → Updates.
 
 
 ## Editor lifecycle and navigation

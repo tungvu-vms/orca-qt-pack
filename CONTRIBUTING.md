@@ -9,7 +9,9 @@ npm ci --ignore-scripts
 npm --prefix lsp-build ci --ignore-scripts
 npm run check
 orca plugin test plugins/qt-tools
-orca plugin check plugins/qt-lsp
+orca plugin check plugins/python-lsp
+orca plugin check plugins/cpp-lsp
+orca plugin check plugins/qml-lsp
 ```
 
 `npm run check` checks source hygiene, type-checks Qt Tools and all LSP sources,
@@ -22,6 +24,8 @@ Build source changes before browser checks:
 
 ```sh
 npm --prefix lsp-build run build
+npm --prefix lsp-build run test:packages
+npm --prefix lsp-build run test:ui:languages
 npm --prefix lsp-build run test:ui
 npm --prefix lsp-build run test:ui:large
 npm --prefix lsp-build run test:ui:stress
@@ -35,14 +39,14 @@ The browser harness runs the built Monaco editor and real LSP core, simulating
 only the Orca document bridge. It does not prove a physical click in Orca's window
 or measure time until a native tab is visible.
 
-Load the development plugin with `orca plugin dev load plugins/qt-lsp`. On Windows,
+Load the development plugin with `orca plugin dev load plugins/python-lsp`. On Windows,
 `pwsh -File lsp-build/dev/e2e-worker.ps1` tests the running worker; add
 `-RequirePySide6` after selecting a Python that has PySide6. `e2e-qt.ps1` and
 `probe-ls.mjs` are manual Qt/clangd diagnostic probes, not CI test gates.
 `remote-e2e.mjs` requires an explicitly chosen SSH host and may install the agent
 and basedpyright there. Do not run it against a host without authorization.
 
-Generated bundles belong in `plugins/qt-lsp`; test output belongs in ignored
+Generated bundles belong in `plugins/python-lsp`, `plugins/cpp-lsp` and `plugins/qml-lsp`; test output belongs in ignored
 `lsp-build/dist-test` or system temporary folders. Never add dependencies, typings
 or local notes to `plugins/<name>`: Orca hashes the whole folder. Keep both lockfiles
 and generated bundles in the same change as source/dependency updates.
@@ -51,3 +55,10 @@ The [maintainer guide](docs/HANDOFF-qt-lsp.md) records architecture and integrat
 constraints. Preserve all upstream licenses and provenance when refreshing vendor
 grammars or icons. [Publication preparation](docs/PUBLICATION.md) is separate from
 code review; a PR does not change the catalog or make this repository public.
+
+The build preserves the legacy `plugins/qt-lsp` folder. Install only the new language
+folders you need, with the legacy editor disabled. `test:ui` and its large/stress
+variants exercise the new Python bundle; `test:ui:languages` runs the independent
+Python, C/C++ and QML bundles together with real servers. C/C++ and QML cases are
+skipped when their server is unavailable; set `QT_LSP_TEST_CLANGD` and
+`QT_LSP_TEST_QMLLS` to require trusted server paths. Both ran locally during the split.

@@ -14,6 +14,7 @@ import { RemoteAgent, findSsh, isValidHost } from './remote'
 import { EXT_RE, PROBE_SKIP } from './probe-script'
 import type { AttachInput, AttachOutput } from './protocol'
 import { limitItems, POST_BUDGET } from './transport'
+import { assertSupportedInput, LANGUAGE_PROFILE, PLUGIN_ID } from './language-profile'
 
 const WIN = process.platform === 'win32'
 const norm = (p: string) => (WIN ? p.toLowerCase() : p)
@@ -155,13 +156,13 @@ export default function activate(orca: OrcaWorkerApi): void {
   // ---------- other hosts over SSH ----------
   const agents = new Map<string, RemoteAgent>()
   let agentSource: string | null = null
-  let cfg = { sshPath: '', remoteRoots: '', remoteNode: '', projectEnvironments: 'on', typeCheckingMode: 'off' }
+  let cfg = { sshPath: '', remoteRoots: '', remoteNode: '', projectEnvironments: 'on', typeCheckingMode: 'off', compilationDatabase: '' }
   const loadCfg = async () => {
-    const [sshPath, remoteRoots, remoteNode, projectEnvironments, typeCheckingMode] = await Promise.all([
+    const [sshPath, remoteRoots, remoteNode, projectEnvironments, typeCheckingMode, compilationDatabase] = await Promise.all([
       setting('sshPath', ''), setting('remoteRoots', ''), setting('remoteNode', ''),
-      setting('projectEnvironments', 'on'), setting('typeCheckingMode', 'off')
+      setting('projectEnvironments', 'on'), setting('typeCheckingMode', 'off'), setting('compilationDatabase', '')
     ])
-    cfg = { sshPath: String(sshPath), remoteRoots: String(remoteRoots), remoteNode: String(remoteNode), projectEnvironments: String(projectEnvironments), typeCheckingMode: String(typeCheckingMode) }
+    cfg = { sshPath: String(sshPath), remoteRoots: String(remoteRoots), remoteNode: String(remoteNode), projectEnvironments: String(projectEnvironments), typeCheckingMode: String(typeCheckingMode), compilationDatabase: String(compilationDatabase) }
   }
   let cfgReady = loadCfg()
   try {
@@ -179,7 +180,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     let a = agents.get(host)
     if (!a) {
       agentSource ??= readFileSync(join(HERE, 'agent.mjs'), 'utf8')
-      a = new RemoteAgent(host, findSsh(cfg.sshPath), agentSource, { remoteRoots: cfg.remoteRoots, remoteNode: cfg.remoteNode, projectEnvironments: cfg.projectEnvironments, typeCheckingMode: cfg.typeCheckingMode })
+      a = new RemoteAgent(host, findSsh(cfg.sshPath), agentSource, { remoteRoots: cfg.remoteRoots, remoteNode: cfg.remoteNode, projectEnvironments: cfg.projectEnvironments, typeCheckingMode: cfg.typeCheckingMode, compilationDatabase: cfg.compilationDatabase })
       a.log = (l) => orca.log(l)
       a.onEvent = (ev, p: any) => {
         // Agent events carry remote paths: tag them with the host before posting to the editor
@@ -242,6 +243,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   }
 
   async function attach(input: AttachInput): Promise<AttachOutput> {
+    assertSupportedInput('lsp.attach', input)
     await cfgReady
     const key = await projectKey()
     const chosen = (await projectHosts())[key]
@@ -276,7 +278,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     const hints = await remoteHints()
     const sizes = [input.size, input.sizeCrlf].filter((s): s is number => typeof s === 'number').flatMap((s) => [s, s + 3])
     const roots = cfg.remoteRoots.split(/[;\n]/).map((s) => s.trim()).filter(Boolean)
-    const q = { hash: input.hash ?? '', sizes, ext: EXT_RE[input.language], hints, roots, skip: PROBE_SKIP, ms: 25000 }
+    const q = { hash: input.hash ?? '', sizes, ext: EXT_RE[input.language], hints, roots, skip: PROBE_SKIP, ms: 25000,
+      stateFile: LANGUAGE_PROFILE === 'all' ? 'state.json' : `state-${PLUGIN_ID}.json` }
     const errors: string[] = []
     const found = await new Promise<{ host: string; root: string } | null>((done) => {
       let left = hosts.length
@@ -304,6 +307,7 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   /** All other handlers: a host-tagged path is forwarded to that host's agent. */
   const route = (name: string) => async (input: any) => {
+    assertSupportedInput(name, input)
     const target = input && typeof input.path === 'string' ? untag(input.path) : null
     if (!target) return local.handlers[name](input)
     if (name === 'lsp.reveal') return { opened: false, reason: 'remote' }
