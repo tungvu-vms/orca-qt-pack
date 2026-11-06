@@ -1,6 +1,6 @@
 # Developer Tools for Orca
 
-Qt, QML, PySide6 and C++ development tools for [Orca](https://github.com/stablyai/orca).
+Independent Python, C/C++ and QML editors for [Orca](https://github.com/stablyai/orca), with optional Qt tools.
 
 | Plugin | Install for |
 | --- | --- |
@@ -15,7 +15,8 @@ Qt, QML, PySide6 and C++ development tools for [Orca](https://github.com/stablya
 
 Use **Orca 1.4.248+** with plugins enabled. The three independent language plugins
 are development builds (**0.1.0**); they have not been published to the catalog yet.
-The catalog on `main` still provides the combined **Qt Code Intelligence 0.5.0**.
+The catalog on `main` still contains legacy releases; the separate language plugins
+are available from this development checkout.
 
 To try the independent plugins:
 
@@ -24,8 +25,14 @@ git clone --branch tungvu-vms/qt-lsp-codex https://github.com/tungvu-vms/orca-qt
 cd orca-qt-pack
 ```
 
-Disable the old **Qt Code Intelligence (Python, QML, C++)** in Orca first, then load
-only the folders you want. Each runs independently and requires approval:
+If upgrading, save any pending edits and remove the old combined development plugin:
+
+```sh
+orca plugin dev unload local.qt-dev-python-lsp
+```
+
+For a catalog-installed copy, use its **Uninstall** menu in Settings → Plugins.
+Then load only the language plugins you need. Each runs independently and requires approval:
 
 | Language | Load from the repository root |
 | --- | --- |
@@ -33,13 +40,23 @@ only the folders you want. Each runs independently and requires approval:
 | C/C++ | `orca plugin dev load plugins/cpp-lsp` |
 | QML | `orca plugin dev load plugins/qml-lsp` |
 
-These are development folders, so keep the checkout in place. See the
-[migration guide](docs/MIGRATION.md) for settings and the legacy plugin.
+Prebuilt files are committed; no build is needed to load these folders. Keep the
+checkout in place while using them. See the [migration guide](docs/MIGRATION.md)
+to transfer custom settings.
 
 Optional Qt Tools, Syntax and Icons are available from **Settings → Plugins →
 Add plugin → Catalog**, URL `https://github.com/tungvu-vms/orca-qt-pack.git`, ref `main`.
+Alternatively, load the optional plugins from the same checkout:
+
+```sh
+orca plugin dev load plugins/qt-tools
+orca plugin dev load plugins/qt-syntax
+orca plugin dev load plugins/qt-icons
+```
+
 Choose the icon theme in **Settings → Appearance → Icon theme**. A Python backend
-or non-Qt C++ project needs none of the Qt plugins.
+or non-Qt C++ project needs none of these Qt add-ons. Keep the retired combined
+editor uninstalled to avoid duplicate language registrations.
 
 Choose your workflow: [Python / PySide6](#python--pyside6) · [C++](#c) · [Qt / QML](#qt--qml).
 
@@ -75,9 +92,10 @@ For Designer and UI/resource compilation, optionally install **Qt Tools** and ch
 
 ## C++
 
-**Requires:** clangd, available with Qt Creator or LLVM, and your compiler toolchain.
+**Requires:** clangd and your compiler toolchain. Install clangd through LLVM, your
+package manager or Qt Creator; Qt itself is optional.
 
-1. Configure CMake with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to generate `compile_commands.json`.
+1. Generate `compile_commands.json` using your build system. For CMake, use `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`.
 2. Open source/header files in **C++ (LSP)** for definitions, hover and completion.
 3. For external/custom build layouts, set **Compilation database folder**. Restart clangd after build configuration changes.
 
@@ -117,6 +135,9 @@ npm run check
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for browser/native tests and the
 [maintainer guide](docs/HANDOFF-qt-lsp.md) for architecture and release steps.
+
+To remove a development plugin, run `orca plugin dev unload <plugin-key>`; for
+example, `orca plugin dev unload local.python-code-intelligence`.
 
 ## Sources and licenses
 
