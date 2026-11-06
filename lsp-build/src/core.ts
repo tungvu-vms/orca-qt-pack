@@ -544,6 +544,7 @@ export function createCore(host: CoreEnv): Core {
     if ((!r || (Array.isArray(r) && !r.length)) && srv.lang === 'cpp') r = await srv.client.request('textDocument/declaration', { textDocument: { uri: uriOf(path) }, position }).catch(() => null)
     const list = r ? (Array.isArray(r) ? r : [r]) : []
     const locations = await locationsOf(list, srv)
+    if (input.intent === 'click') host.log(`[navigation] click ${path}:${position.line + 1}:${position.character + 1} -> ${locations.length} definitions`)
     return JSON.parse(JSON.stringify({ locations }))
   }))
 
@@ -742,7 +743,11 @@ export function createCore(host: CoreEnv): Core {
   })
 
   /** Open the definition in an Orca tab (file inside a workspace); outside a workspace the editor shows a peek. */
-  handle('lsp.reveal', async ({ path, line }: { path: string; line: number }) => host.reveal ? host.reveal(path, line) : { opened: false, reason: 'no-host' })
+  handle('lsp.reveal', async ({ path, line }: { path: string; line: number }) => {
+    const result = host.reveal ? await host.reveal(path, line) : { opened: false, reason: 'no-host' }
+    host.log(`[navigation] reveal ${path}:${line} opened=${result.opened}${result.reason ? ` reason=${result.reason}` : ''}`)
+    return result
+  })
 
   return { handlers, workspaceRemoved, shutdown: () => { for (const s of [...servers.values()]) stopServer(s) } }
 }

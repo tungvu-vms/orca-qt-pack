@@ -1123,6 +1123,7 @@ function createCore(host) {
     if ((!r || Array.isArray(r) && !r.length) && srv.lang === "cpp") r = await srv.client.request("textDocument/declaration", { textDocument: { uri: uriOf(path) }, position }).catch(() => null);
     const list = r ? Array.isArray(r) ? r : [r] : [];
     const locations = await locationsOf(list, srv);
+    if (input.intent === "click") host.log(`[navigation] click ${path}:${position.line + 1}:${position.character + 1} -> ${locations.length} definitions`);
     return JSON.parse(JSON.stringify({ locations }));
   }));
   handle("lsp.references", async ({ path, position, includeDeclaration = true }) => {
@@ -1321,7 +1322,11 @@ function createCore(host) {
     if (jsonBytes({ text: windowText, lang, window: [from, to] }) > RESPONSE_BUDGET) return { text: "", lang, truncated: true };
     return { text: windowText, lang, window: [from, to] };
   });
-  handle("lsp.reveal", async ({ path, line }) => host.reveal ? host.reveal(path, line) : { opened: false, reason: "no-host" });
+  handle("lsp.reveal", async ({ path, line }) => {
+    const result = host.reveal ? await host.reveal(path, line) : { opened: false, reason: "no-host" };
+    host.log(`[navigation] reveal ${path}:${line} opened=${result.opened}${result.reason ? ` reason=${result.reason}` : ""}`);
+    return result;
+  });
   return { handlers, workspaceRemoved, shutdown: () => {
     for (const s of [...servers.values()]) stopServer(s);
   } };

@@ -438,7 +438,7 @@ async function main() {
   const isMine = (m: monaco.editor.ITextModel) => m === model
   let interactiveSequence = 0
   const interactivePrefix = Math.random().toString(36).slice(2)
-  async function queryAt<T>(name: string, position: monaco.Position, token: monaco.CancellationToken): Promise<T | null> {
+  async function queryAt<T>(name: string, position: monaco.Position, token: monaco.CancellationToken, extra: object = {}): Promise<T | null> {
     if (token.isCancellationRequested) return null
     const revision = model.getVersionId()
     await flushChange()
@@ -450,7 +450,7 @@ async function main() {
       void req('lsp.cancel', { path, requestId }, 2000).catch(() => {})
     })
     try {
-      const result = await req<T>(name, { path, position: toPos(position), requestId }, 20000, controller.signal)
+      const result = await req<T>(name, { path, position: toPos(position), requestId, ...extra }, 20000, controller.signal)
       return token.isCancellationRequested || revision !== model.getVersionId() ? null : result
     } catch (e) { if (!token.isCancellationRequested) reportError(e); return null }
     finally { cancel.dispose() }
@@ -550,6 +550,66 @@ async function main() {
       const d = await queryAt<DefinitionOutput>('lsp.definition', position, token)
       return d?.locations.length ? resolveLocations(d.locations) : null
     }
+  })
+  // Record Ctrl/Cmd at press time. Monaco's native link action checks the
+  // modifier again at mouse-up and can silently drop a click after key release.
+  // Explicit clicks also skip preview materialization before opening a tab.
+  let pressedLink: { position: monaco.Position; revision: number; x: number; y: number } | null = null
+  let clickRequest: monaco.CancellationTokenSource | null = null
+  const clickedPosition = (event: MouseEvent) => {
+    const target = editor.getTargetAtClientPoint(event.clientX, event.clientY)
+    return target?.type === monaco.editor.MouseTargetType.CONTENT_TEXT && target.position && model.getWordAtPosition(target.position) ? target.position : null
+  }
+  const navigateClick = async (position: monaco.Position) => {
+    clickRequest?.cancel(); clickRequest?.dispose()
+    const cancellation = clickRequest = new monaco.CancellationTokenSource()
+    editor.focus(); editor.setPosition(position)
+    setStatus(`Looking up definition at line ${position.lineNumber}…`, 'busy')
+    const d = await queryAt<DefinitionOutput>('lsp.definition', position, cancellation.token, { intent: 'click' })
+    if (cancellation.token.isCancellationRequested) return
+    if (!d?.locations.length) { if (d) setStatus('No definition found at this symbol.', 'warn'); return }
+    const loc = d.locations[0]
+    if (sameFile(loc.path, path)) {
+      editor.setPosition(new monaco.Position(loc.range.start.line + 1, loc.range.start.character + 1))
+      editor.revealRangeInCenter(toRange(loc.range))
+      setStatus(`${SERVER} • ${rel} • definition at line ${loc.range.start.line + 1}`, 'ok'); return
+    }
+    if (loc.openable ?? loc.inWorkspace) {
+      const r = await req<{ opened: boolean; rel?: string }>('lsp.reveal', { path: loc.path, line: loc.range.start.line + 1 }).catch(reportError)
+      if (r?.opened) { setStatus(`Opened ${r.rel ?? shortName(loc.path)}, line ${loc.range.start.line + 1}`, 'ok'); return }
+    }
+    const locations = await resolveLocations(d.locations)
+    if (!cancellation.token.isCancellationRequested) await StandaloneServices.get(ICommandService).executeCommand('editor.action.peekLocations', model.uri, position, locations)
+  }
+  const linkDown = (event: MouseEvent) => {
+    pressedLink = null
+    if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.detail > 1) return
+    const position = clickedPosition(event)
+    if (!position) return
+    pressedLink = { position, revision: model.getVersionId(), x: event.clientX, y: event.clientY }
+    event.preventDefault(); event.stopImmediatePropagation()
+  }
+  const linkUp = (event: MouseEvent) => {
+    const pressed = pressedLink
+    if (!pressed || event.button !== 0) return
+    pressedLink = null
+    event.preventDefault(); event.stopImmediatePropagation()
+    if (pressed.revision !== model.getVersionId() || Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) > 5) return
+    void navigateClick(pressed.position).catch(reportError)
+  }
+  container.addEventListener('mousedown', linkDown, true)
+  container.addEventListener('mouseup', linkUp, true)
+  const resetLinkPress = () => { pressedLink = null }
+  window.addEventListener('mouseup', resetLinkPress)
+  window.addEventListener('blur', resetLinkPress)
+  window.addEventListener('pointercancel', resetLinkPress)
+  const cancelClickOnEdit = model.onDidChangeContent(() => { pressedLink = null; clickRequest?.cancel() })
+  window.addEventListener('beforeunload', () => {
+    container.removeEventListener('mousedown', linkDown, true); container.removeEventListener('mouseup', linkUp, true)
+    window.removeEventListener('mouseup', resetLinkPress); window.removeEventListener('blur', resetLinkPress)
+    window.removeEventListener('pointercancel', resetLinkPress)
+    clickRequest?.cancel(); clickRequest?.dispose()
+    cancelClickOnEdit.dispose()
   })
   const ideProviders = registerIdeProviders({ language: MONACO_LANG, path, model, readOnly: session.readOnly,
     request: req, flush: flushChange, version: () => version, locations: resolveLocations, report: reportError, status: (message) => setStatus(message, 'warn') })

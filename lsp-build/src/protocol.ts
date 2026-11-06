@@ -27,7 +27,7 @@ export interface AttachOutput {
 export interface TextEdit { offset: number; length: number; text: string }
 /** open: `text` (small file) or omitted so the worker reads from disk. change: `edits` (+ `expectLength`) or `text`. */
 export interface DocInput { path: string; version: number; text?: string; edits?: TextEdit[]; expectLength?: number }
-export interface PosInput { path: string; position: Pos; requestId?: string; version?: number }
+export interface PosInput { path: string; position: Pos; requestId?: string; version?: number; intent?: 'click' }
 
 export interface HoverOutput { markdown: string | null; range: Range | null }
 export interface DefinitionOutput { locations: Loc[] }

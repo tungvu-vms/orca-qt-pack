@@ -47,6 +47,7 @@ if (realFile) { config.python = process.env.QT_LSP_TEST_PYTHON; config.projectEn
 const calls = [], reveals = [], errors = []
 let delayRename = false, failNextChange = false
 let releaseInitialOpen, releaseFirstUpload, heldFirstUpload = false
+let holdPreview = false, releasePreview
 const coreHost = { log() {}, post() {}, setting: async (k, fallback) => config[k] ?? fallback,
   storageGet: async () => null, storageSet: async () => {}, roots: async () => ({ focused: realFile ? process.env.QT_LSP_UI_ROOT : project, roots: [realFile ? process.env.QT_LSP_UI_ROOT : project] }),
   reveal: async (path, line) => { reveals.push({ path, line }); return { opened: true, line } }
@@ -101,6 +102,7 @@ const server = createServer(async (req, res) => {
       }
       else {
         result = await core.handlers[name](input)
+        if (name === 'lsp.peek' && holdPreview) await new Promise((done) => { releasePreview = done })
         if (name === 'lsp.open' && largeMode) await new Promise((done) => { releaseInitialOpen = done })
         if (name === 'lsp.upload' && largeMode && !heldFirstUpload) {
           heldFirstUpload = true
@@ -449,6 +451,42 @@ try {
   assert.equal(await page.evaluate(() => window.__session.value), unsavedClass)
   assert.equal(readFileSync(path, 'utf8'), text, 'navigation recovery must not save the draft')
   console.log('PASS class Ctrl+Click: an idle worker restart resynchronizes the unsaved editor before lookup')
+  await go(13, 1)
+  const classSymbol = page.locator('.view-lines .view-line').filter({ hasText: 'instance = DemoSettings()' }).getByText('DemoSettings', { exact: true })
+  const beforeEarlyRelease = reveals.length
+  await page.keyboard.down('Control')
+  await classSymbol.hover()
+  await page.mouse.down()
+  await page.keyboard.up('Control')
+  await page.mouse.up()
+  for (let i = 0; i < 100 && reveals.length === beforeEarlyRelease; i++) await page.waitForTimeout(20)
+  assert.equal(reveals.length, beforeEarlyRelease + 1, 'Ctrl pressed at mouse-down must navigate even if released just before mouse-up')
+  console.log('PASS class click: releasing Ctrl before mouse-up still navigates exactly once')
+  await go(11, 1)
+  await page.mouse.move(1, 1)
+  holdPreview = true
+  const beforeSlowPreview = reveals.length
+  try {
+    await page.keyboard.down('Control')
+    const importedClass = page.locator('.view-lines .view-line').filter({ hasText: 'from helper import DemoSettings' }).getByText('DemoSettings', { exact: true })
+    await importedClass.hover()
+    for (let i = 0; i < 100 && !releasePreview; i++) await page.waitForTimeout(20)
+    assert(releasePreview, 'the preview must be held in flight')
+    await page.mouse.down(); await page.mouse.up(); await page.keyboard.up('Control')
+    for (let i = 0; i < 100 && reveals.length === beforeSlowPreview; i++) await page.waitForTimeout(20)
+    assert.equal(reveals.length, beforeSlowPreview + 1, 'explicit class navigation must not wait for a blocked hover preview')
+    assert(calls.some((c) => c.name === 'lsp.definition' && c.input.intent === 'click'), 'explicit clicks must use the direct navigation path')
+    console.log('PASS class click: opening a project file does not wait for a blocked preview')
+  } finally { holdPreview = false; releasePreview?.() }
+  await go(13, 1)
+  await page.keyboard.down('Control')
+  await classSymbol.hover(); await page.mouse.down()
+  await page.mouse.move(5, 845); await page.mouse.up(); await page.keyboard.up('Control')
+  const beforePlainClick = reveals.length
+  await classSymbol.click()
+  await page.waitForTimeout(400)
+  assert.equal(reveals.length, beforePlainClick, 'releasing outside the editor must not arm a later ordinary click')
+  console.log('PASS click state: an outside release does not turn a later plain click into navigation')
   }
 
   assert.deepEqual(errors, [], 'no uncaught browser errors')

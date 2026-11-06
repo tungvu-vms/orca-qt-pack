@@ -74,6 +74,15 @@ Read `README.md` first (install, settings, SSH, security). This file is the work
   source with an unsaved class import/call, restarts the real core and verifies that
   Ctrl+Click still opens its definition. A real-file mode can check every occurrence
   using QT_LSP_UI_ALL_POSITIONS=1 (used for SettingScreenQSettings in VMS.py).
+- Explicit Ctrl/Cmd-click now records the modifier at mouse-down and performs the
+  navigation on a short, unmodified-in-content mouse-up even if Ctrl was released
+  first. Monaco's native gesture discarded this case. The capture handler owns the
+  click to avoid duplicate native navigation, clears state after outside release,
+  blur/cancellation/new press, and cancels lookup after content edits. Workspace
+  clicks open through reveal directly, without waiting for a hover preview; F12
+  and library/remote peek remain available. Only explicit clicks/reveals emit
+  `[navigation]` logs so missing input vs lookup vs tab opening can be distinguished.
+  Regressions cover early Ctrl release, blocked preview and stale outside presses.
 
 ## Research follow-up: VS Code responsiveness (not implemented)
 
