@@ -86,3 +86,17 @@ results and decisions below rather than repeatedly re-running unchanged suites.
   cancellation, without claiming reduced server RAM. Worker model mirrors also
   use memory; total Orca RAM/CPU improvement requires a comparable full-app trace.
   Preserve existing catalog/version 0.5.0; update development PR #1 only.
+- Windows CI exposed `write EPIPE` during server shutdown. A real subprocess
+  regression reproduced the uncaught error before the fix. Stdin errors now
+  reject pending requests and stop the child; explicit kill immediately blocks
+  subsequent requests, notifications and late success/error replies. Cancellation
+  folders and exit callbacks still wait for child exit. Four regressions cover
+  the broken pipe, stream failure and both late-reply outcomes; test cleanup also
+  kills fixture children on timeout.
+- Shutdown-fix validation: 25/25 integration/logic tests with real PySide6,
+  typecheck, byte parity of all 29 generated files, plugin check, native worker
+  E2E with PySide6 and normal/large/stress/activity/lifecycle/TextMate browser
+  suites passed. The 80-preview checks retained approximately 5 MiB for one
+  target and 7 MiB for different targets. Thirty editor/model cycles retained
+  1.1 MiB with zero grammar workers; thirty iframe cycles retained 0.08 MiB in
+  the parent. No fixture server processes remained after tests.

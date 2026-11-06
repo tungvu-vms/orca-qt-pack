@@ -27,20 +27,21 @@ export class LspClient {
       args = [...args, `--cancellationReceive=file:${basename(this.cancellationFolder)}`]
     }
     this.proc = spawn(command, args, { cwd, env: env ?? process.env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    this.proc.stdin!.on('error', (e) => {
+      this.log(`[stdin] ${e.message}`)
+      this.closePending(e)
+      this.kill()
+    })
     this.proc.stdout!.on('data', (d: Buffer) => this.onData(d))
     this.proc.stderr!.on('data', (d: Buffer) => this.log(`[stderr] ${d.toString().trim().slice(0, 500)}`))
     this.proc.on('exit', (code) => {
-      this.exited = true
-      for (const p of this.pending.values()) { p.cleanup(); p.reject(new Error('language server exited')) }
-      this.pending.clear()
+      this.closePending(new Error('language server exited'))
       this.clearCancellationFolder()
       this.onExit?.(code)
     })
     this.proc.on('error', (e) => {
       this.log(`[spawn] ${e.message}`)
-      this.exited = true
-      for (const p of this.pending.values()) { p.cleanup(); p.reject(e) }
-      this.pending.clear()
+      this.closePending(e)
       this.clearCancellationFolder()
     })
   }
@@ -77,7 +78,18 @@ export class LspClient {
     if (!this.exited) this.write({ jsonrpc: '2.0', method, params })
   }
 
-  kill() { try { this.proc.kill() } catch { /* already exited */ } }
+  kill() {
+    this.closePending(new Error('language server exited'))
+    try { this.proc.kill() } catch { /* already exited */ }
+  }
+
+  private closePending(error: Error) {
+    if (this.exited) return
+    this.exited = true
+    for (const p of this.pending.values()) { p.cleanup(); p.reject(error) }
+    this.pending.clear()
+    this.buf = Buffer.alloc(0)
+  }
 
   private cancelRequest(id: number) {
     if (this.cancellationFolder) {
@@ -100,6 +112,12 @@ export class LspClient {
   }
 
   private write(msg: unknown) {
+    if (this.exited) return
+    if (!this.proc.stdin!.writable || this.proc.stdin!.destroyed) {
+      this.closePending(new Error('language server input closed'))
+      this.kill()
+      return
+    }
     const s = JSON.stringify(msg)
     this.proc.stdin!.write(`Content-Length: ${Buffer.byteLength(s, 'utf8')}\r\n\r\n${s}`)
   }
@@ -122,6 +140,7 @@ export class LspClient {
   }
 
   private dispatch(msg: any) {
+    if (this.exited) return
     if (msg.id !== undefined && msg.method === undefined) {
       if (this.cancelled.delete(msg.id) && this.cancellationFolder) {
         try { rmSync(join(this.cancellationFolder, `cancellation-${msg.id}.tmp`), { force: true }) } catch { /* exit cleanup retries */ }

@@ -184,6 +184,11 @@ The browser harness simulates Orca's document bridge and uses the actual built e
 and real language server. `lsp-build/dev/e2e-worker.ps1` separately asserts the bridge
 against a running Orca and exits with an error when a check fails.
 
+If a language server closes its input pipe, its pending requests fail and the
+plugin worker stays running. Stopping a client rejects pending requests immediately;
+late server-request replies cannot write to that pipe. Python cancellation files
+remain allocated until the child process exits.
+
 `npm run check:build` rebuilds in place and verifies every plugin file's bytes and the
 complete file list. CI uses the lockfile and Node 24.19.0 to run these checks.
 

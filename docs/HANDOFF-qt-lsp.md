@@ -214,6 +214,7 @@ Source lives in `lsp-build/src`, built into `plugins/qt-lsp` by `cd lsp-build &&
 - Pyright must be **basedpyright** (plain Pyright has no semantic tokens). Spawn it as `node langserver.index.js --stdio`
   with `ELECTRON_RUN_AS_NODE=1`, cwd = plugin dir (cwd inside the project held temp dirs busy).
 - `typeCheckingMode` defaults to **off** (user request, Pylance-like).
+- LSP stdin errors close the client and stop its child without crashing the plugin worker. Explicit kill rejects pending requests immediately and blocks late replies; cancellation-folder cleanup and `onExit` follow the actual child exit.
 - Monaco semantic highlighting needs `StandaloneServices.get(IConfigurationService).updateValues([['editor.semanticHighlighting',{enabled:true}]])`.
 
 ## Security posture (keep it)

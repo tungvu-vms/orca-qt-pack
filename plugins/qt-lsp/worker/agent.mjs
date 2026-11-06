@@ -38,26 +38,21 @@ var LspClient = class {
       args = [...args, `--cancellationReceive=file:${basename(this.cancellationFolder)}`];
     }
     this.proc = spawn(command, args, { cwd, env: env ?? process.env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    this.proc.stdin.on("error", (e) => {
+      this.log(`[stdin] ${e.message}`);
+      this.closePending(e);
+      this.kill();
+    });
     this.proc.stdout.on("data", (d) => this.onData(d));
     this.proc.stderr.on("data", (d) => this.log(`[stderr] ${d.toString().trim().slice(0, 500)}`));
     this.proc.on("exit", (code) => {
-      this.exited = true;
-      for (const p of this.pending.values()) {
-        p.cleanup();
-        p.reject(new Error("language server exited"));
-      }
-      this.pending.clear();
+      this.closePending(new Error("language server exited"));
       this.clearCancellationFolder();
       this.onExit?.(code);
     });
     this.proc.on("error", (e) => {
       this.log(`[spawn] ${e.message}`);
-      this.exited = true;
-      for (const p of this.pending.values()) {
-        p.cleanup();
-        p.reject(e);
-      }
-      this.pending.clear();
+      this.closePending(e);
       this.clearCancellationFolder();
     });
   }
@@ -98,10 +93,21 @@ var LspClient = class {
     if (!this.exited) this.write({ jsonrpc: "2.0", method, params });
   }
   kill() {
+    this.closePending(new Error("language server exited"));
     try {
       this.proc.kill();
     } catch {
     }
+  }
+  closePending(error) {
+    if (this.exited) return;
+    this.exited = true;
+    for (const p of this.pending.values()) {
+      p.cleanup();
+      p.reject(error);
+    }
+    this.pending.clear();
+    this.buf = Buffer.alloc(0);
   }
   cancelRequest(id) {
     if (this.cancellationFolder) {
@@ -126,6 +132,12 @@ var LspClient = class {
     this.cancelled.clear();
   }
   write(msg) {
+    if (this.exited) return;
+    if (!this.proc.stdin.writable || this.proc.stdin.destroyed) {
+      this.closePending(new Error("language server input closed"));
+      this.kill();
+      return;
+    }
     const s = JSON.stringify(msg);
     this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(s, "utf8")}\r
 \r
@@ -155,6 +167,7 @@ ${s}`);
     }
   }
   dispatch(msg) {
+    if (this.exited) return;
     if (msg.id !== void 0 && msg.method === void 0) {
       if (this.cancelled.delete(msg.id) && this.cancellationFolder) {
         try {
