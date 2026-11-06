@@ -86,6 +86,17 @@ Read `README.md` first (install, settings, SSH, security). This file is the work
 
 ## Performance work in the development branch
 
+Ctrl/Cmd-click on a declaration now matches VS Code's alternative definition
+action: when the sole definition contains the click in the current file, invoke
+the existing Peek References action instead of navigating back to the same range.
+Shift+F12 remains available anywhere on the symbol. A real-server browser check
+asserts that a declaration lists an importing/calling file and double-clicking
+its usage opens the correct file/line. The original definition/F12 tests still pass.
+On real privacy.py / PrivacyCleanupError, a cold core returned six same-file
+locations; ignored test files were absent initially (the project's .gitignore
+excludes tests). A warm native server also found test/artifact references. Keep
+this indexing distinction explicit; the plugin does not override project excludes.
+
 Hidden frames defer grammar/LSP startup, pause reads/diagnostics/semantic refresh,
 coalesce hidden drafts, and resume without a disk save. Preserve the initial
 attachment snapshot before the visibility wait. `EditorActivity` combines page

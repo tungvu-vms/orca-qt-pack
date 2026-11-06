@@ -585,6 +585,15 @@ async function main() {
     if (cancellation.token.isCancellationRequested) return
     if (!d?.locations.length) { if (d) setStatus('No definition found at this symbol.', 'warn'); return }
     const loc = d.locations[0]
+    // Match VS Code's alternative-definition action when the only result is
+    // the declaration under the pointer. Reuse its references UI/providers.
+    if (d.locations.length === 1 && sameFile(loc.path, path) && toRange(loc.range).containsPosition(position)) {
+      if (!editor.getPosition()?.equals(position)) return
+      setStatus(`Finding usages of ${model.getWordAtPosition(position)?.word ?? 'this symbol'}…`, 'busy')
+      await StandaloneServices.get(ICommandService).executeCommand('editor.action.referenceSearch.trigger')
+      if (!cancellation.token.isCancellationRequested) setStatus(`${SERVER} • ${rel}`, 'ok')
+      return
+    }
     if (sameFile(loc.path, path)) {
       editor.setPosition(new monaco.Position(loc.range.start.line + 1, loc.range.start.character + 1))
       editor.revealRangeInCenter(toRange(loc.range))

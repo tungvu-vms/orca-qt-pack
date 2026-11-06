@@ -33,6 +33,8 @@ if (!realFile) writeFileSync(path, text)
 const helperPath = join(project, 'helper.py')
 writeFileSync(helperPath, 'def greet(name: str, count: int = 1) -> str:\n    return name * count\n' + ('#' + 'x'.repeat(998) + '\n').repeat(1798) + 'greet("last")\n\ndef discoverable_symbol() -> str:\n    return "Qt"\n')
 writeFileSync(helperPath, readFileSync(helperPath, 'utf8') + '\nclass DemoSettings:\n    pass\n')
+const consumerPath = join(project, 'consumer.py')
+writeFileSync(consumerPath, 'from main import WindowModel\nwindow = WindowModel()\n')
 if (stressMode) writeFileSync(helperPath, readFileSync(helperPath, 'utf8') + Array.from({ length: 80 }, (_, i) => `\ndef target_${i}() -> int:\n    return ${i}\n`).join(''))
 if (evictionMode) {
   const tail = Array.from({ length: 80 }, (_, i) => `import target_${i}\ntarget_${i}.go()\n`).join('')
@@ -264,15 +266,26 @@ try {
     const word = process.env.QT_LSP_UI_SYMBOL
     assert(word && process.env.QT_LSP_UI_ROOT && process.env.QT_LSP_TEST_PYTHON, 'real-file mode needs UI_ROOT, UI_SYMBOL and TEST_PYTHON')
     const lines = text.split('\n')
-    const positions = process.env.QT_LSP_UI_ALL_POSITIONS === '1' ? lines.flatMap((line, i) => line.includes(word) ? [i] : []) : [lines.findLastIndex((line) => line.includes(word))]
+    const referenceMode = process.env.QT_LSP_UI_REFERENCES === '1'
+    const positions = referenceMode ? [lines.findIndex(line => line.trimStart().startsWith(`class ${word}`))] : process.env.QT_LSP_UI_ALL_POSITIONS === '1' ? lines.flatMap((line, i) => line.includes(word) ? [i] : []) : [lines.findLastIndex((line) => line.includes(word))]
     assert(positions.length && positions.every((line) => line >= 0), 'symbol must exist in the requested file')
-    for (const line of positions) for (let run = 1; run <= (positions.length === 1 ? 3 : 1); run++) {
+    for (const line of positions) for (let run = 1; run <= (positions.length === 1 && !referenceMode ? 3 : 1); run++) {
       const column = lines[line].indexOf(word) + 2
       await go(line + 1, column)
       const symbol = page.locator('.view-lines .view-line').filter({ hasText: lines[line].trim() }).getByText(word, { exact: true })
       await page.mouse.move(1, 1)
       const before = reveals.length, started = Date.now()
       await symbol.click({ modifiers: ['Control'] })
+      if (referenceMode) {
+        await page.locator('.peekview-widget.results-loaded').waitFor({ state: 'visible', timeout: 30000 })
+        if (process.env.QT_LSP_UI_USAGE_FILE) await page.locator('.peekview-widget').getByText(process.env.QT_LSP_UI_USAGE_FILE, { exact: true }).first().waitFor()
+        const references = calls.filter(c => c.name === 'lsp.references' && c.result?.locations?.length).at(-1)
+        assert(references, 'the real class declaration must resolve references')
+        assert.equal(reveals.length, before)
+        assert.equal(readFileSync(path, 'utf8'), text)
+        console.log(JSON.stringify({ action:'Ctrl+Click references', symbol:word, ms:Date.now()-started, references:references.result.locations.length, files:new Set(references.result.locations.map(l=>l.path)).size }))
+        continue
+      }
       for (let i = 0; i < 300 && reveals.length === before; i++) await page.waitForTimeout(50)
       assert.equal(reveals.length, before + 1, 'real-project Ctrl+Click must resolve')
       console.log(JSON.stringify({ run, sourceLine: line + 1, action: 'Ctrl+Click', symbol: word, ms: Date.now() - started, target: reveals.at(-1).path, targetLine: reveals.at(-1).line }))
@@ -377,6 +390,22 @@ try {
   await page.locator('.quick-input-widget').waitFor({ state: 'hidden' })
   console.log('PASS Ctrl+Shift+O: class/method symbols')
 
+  // Ctrl-clicking a declaration must list usages, like VS Code's alternative action.
+  await go(3, 9)
+  const beforeDeclarationClick = reveals.length
+  await page.locator('.view-lines .view-line').filter({ hasText: 'class WindowModel:' }).getByText('WindowModel', { exact: true }).click({ modifiers: ['Control'] })
+  await page.locator('.peekview-widget').waitFor({ state: 'visible', timeout: 15000 })
+  assert.match(await page.locator('.peekview-widget').innerText(), /consumer\.py/)
+  assert.equal(reveals.length, beforeDeclarationClick, 'the declaration click must open the usages list before navigating')
+  await page.locator('.peekview-widget .monaco-list-row').filter({ hasText: 'consumer.py' }).locator('.monaco-tl-twistie').click()
+  const consumerRow = page.locator('.peekview-widget .monaco-list-row').filter({ hasText: 'window = WindowModel()' }).first()
+  await consumerRow.waitFor({ state: 'visible' })
+  await consumerRow.dblclick()
+  for (let i = 0; i < 100 && reveals.length === beforeDeclarationClick; i++) await page.waitForTimeout(20)
+  assert(reveals.slice(beforeDeclarationClick).some(r => r.path.toLowerCase() === consumerPath.toLowerCase() && r.line === 2), 'selecting a usage must open its file at the correct line')
+  await page.keyboard.press('Escape')
+  console.log('PASS declaration Ctrl+Click: lists importing/calling files and opens a selected usage')
+
   await go(11, 12)
   await page.keyboard.press('Shift+F12')
   await page.locator('.peekview-widget').waitFor({ state: 'visible', timeout: 15000 })
@@ -444,9 +473,10 @@ try {
 
   // Keyboard navigation is enough to exercise the existing definition opener too.
   await go(11, 12)
+  const beforeF12 = reveals.length
   await page.keyboard.press('F12')
-  for (let i = 0; i < 30 && !reveals.length; i++) await page.waitForTimeout(100)
-  assert(reveals.some((r) => r.path.toLowerCase().endsWith('helper.py') && r.line === 1))
+  for (let i = 0; i < 30 && reveals.length === beforeF12; i++) await page.waitForTimeout(100)
+  assert(reveals.slice(beforeF12).some((r) => r.path.toLowerCase().endsWith('helper.py') && r.line === 1))
   console.log('PASS F12: opens the selected definition at the correct line')
 
   await page.keyboard.press('F1')

@@ -64,6 +64,7 @@ been published to the catalog; load this checkout with `orca plugin dev load plu
 | --- | --- | --- |
 | Go to definition | F12 / Ctrl+Click | F12 / Cmd+Click |
 | Find references, including other project files | Shift+F12 | Shift+F12 |
+| List usages from the symbol's declaration | Ctrl+Click on its declared name | Cmd+Click on its declared name |
 | Find a function, class or method in the file | Ctrl+Shift+O | Cmd+Shift+O |
 | Go to a line and column | Ctrl+G | Ctrl+G |
 | Show function parameters | Ctrl+Shift+Space; also while typing `(` or `,` | Cmd+Shift+Space |
