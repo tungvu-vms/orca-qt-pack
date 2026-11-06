@@ -11,7 +11,7 @@ current catalog release and development branch; no response-time guarantee is ma
 
 Qt Tools and Code Intelligence execute trusted worker code with the user's account
 access. Interpreter execution, compiler discovery and SSH behavior are described
-in [README](README.md#security). Treat cloned projects and their environments as
+in [configuration and security](docs/CONFIGURATION.md#security). Treat cloned projects and their environments as
 executable code. Disable project environments or automatic SSH discovery when
 those workflows are not trusted.
 
