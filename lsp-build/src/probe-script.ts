@@ -7,7 +7,8 @@ const fs=require('fs'),path=require('path'),os=require('os'),crypto=require('cry
 const A=JSON.parse(Buffer.from(Q,'base64').toString());
 const sizes=new Set(A.sizes),SK=new Set(A.skip),ext=new RegExp(A.ext,'i');
 const roots=[...A.hints,...A.roots];
-try{const st=JSON.parse(fs.readFileSync(path.join(os.homedir(),'.orca-qt-lsp','state.json'),'utf8'));roots.push(...(st.roots||[]))}catch{}
+const stateFile=/^state-(python|cpp|qml)-code-intelligence\.json$/.test(A.stateFile||'')?A.stateFile:'state.json';
+try{const st=JSON.parse(fs.readFileSync(path.join(os.homedir(),'.orca-qt-lsp',stateFile),'utf8'));roots.push(...(st.roots||[]))}catch{}
 const win=process.platform==='win32';
 const cli=win?path.join(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local'),'Programs','orca','resources','bin','orca.exe'):process.platform==='darwin'?'/Applications/Orca.app/Contents/Resources/bin/orca':'';
 try{if(!cli||!fs.existsSync(cli))throw 0;const o=require('child_process').execFileSync(cli,['worktree','list','--json'],{encoding:'utf8',timeout:8000,stdio:['ignore','pipe','ignore'],maxBuffer:64<<20,windowsHide:true});
@@ -35,7 +36,7 @@ export interface ProbeQuery { hash: string; sizes: number[]; ext: string; hints:
 export const EXT_RE: Record<string, string> = {
   python: '\\.(py|pyi|pyw)$',
   qml: '\\.qml$',
-  cpp: '\\.(cpp|cc|cxx|c|h|hpp|hh|hxx|inl|ipp)$'
+  cpp: '\\.(cpp|cc|cxx|c\\+\\+|c|h|hpp|hh|hxx|inl|ipp|tpp|tcc|ixx|cppm)$'
 }
 export const PROBE_SKIP = ['node_modules', '__pycache__', 'venv', 'env', 'dist', 'site-packages', 'Library', 'Applications', 'AppData',
   'Movies', 'Music', 'Pictures', 'Downloads', '$Recycle.Bin', 'Windows', 'Program Files', 'Program Files (x86)', 'ProgramData', 'snap', 'proc', 'sys']

@@ -53,4 +53,4 @@ for (const file of files) {
   if (pct < 40) failed = true
   console.log(`${basename(file).padEnd(18)} ${s.id.padEnd(16)} ${String(pct).padStart(3)}% tokens colored  [${[...seen].slice(0, 8).join(', ')}]`)
 }
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0
