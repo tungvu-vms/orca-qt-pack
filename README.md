@@ -148,20 +148,21 @@ Each other machine needs, once:
 Qt Developer Tools runs Qt tools (Designer, uic, rcc, qmllint, lupdate/lrelease, CMake, qmake, Python) only when you
 press a button or run a command, plus `qmlformat` on save (can be turned off).
 
-Report security issues privately through GitHub's *Report a vulnerability* on this repository.
+See [SECURITY.md](SECURITY.md) for private reporting and trust boundaries.
 
 ## Development
 
 ```sh
-npm install                       # typescript, @types/node, vscode-textmate (checks only, not shipped)
+npm ci --ignore-scripts            # locked development dependencies, not shipped
 npx tsc -p plugins/qt-tools
 orca plugin test plugins/qt-tools
 orca plugin check plugins/qt-tools
 orca plugin validate plugins/qt-syntax
-node tools/tokenize-check.mjs plugins/qt-syntax samples/*
+node tools/tokenize-check.mjs plugins/qt-syntax samples/demo-app/ui/mainwindow.ui samples/demo-app/app.qrc
 
 # Qt Code Intelligence: source in lsp-build/src, built into plugins/qt-lsp
-cd lsp-build && npm ci && node build.mjs
+npm --prefix lsp-build ci --ignore-scripts
+npm --prefix lsp-build run build
 orca plugin dev load plugins/qt-lsp
 ```
 
@@ -196,10 +197,13 @@ complete file list. CI uses the lockfile and Node 24.19.0 to run these checks.
 - **Never put anything else in `plugins/<name>/`** (`node_modules`, `.d.ts`…). Orca hashes the whole folder; extra files
   after approval stop the worker ("content hash mismatch"). Orca's typings live in `types/orca/`.
 - `lsp-build/vendor/`: grammars and themes taken from VS Code; refresh with
-  `node prepare-vendor.mjs "<VS Code>/resources/app/extensions"`.
-- `lsp-build/dev/`: end-to-end scripts against a running Orca (`e2e-worker.ps1`, `e2e-qt.ps1`, `interp-e2e.ps1`,
-  `remote-e2e.mjs`) and sample-project generators.
+  `node prepare-vendor.mjs "<VS Code>/resources/app/extensions"` (see its source requirements).
+- `lsp-build/dev/`: automated regression checks, native worker checks (`e2e-worker.ps1`),
+  manual Qt/clangd probes (`e2e-qt.ps1`, `probe-ls.mjs`) and the opt-in SSH probe (`remote-e2e.mjs`).
 - `tools/normalize-syntaxes.mjs`, `tools/build-icon-theme.mjs`: see the comments in each file.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full verification commands and
+[publication preparation](docs/PUBLICATION.md) before making a private checkout public.
 
 ### Release
 
@@ -224,3 +228,6 @@ complete file list. CI uses the lockfile and Node 24.19.0 to run these checks.
 
 Each plugin folder carries its license files and third-party notices. Language servers are not bundled: basedpyright
 (MIT), qmlls (Qt) and clangd (LLVM) run from the user's machine.
+
+Original code in this repository is copyright © 2026 **Tùng Vũ** and licensed under
+MIT. Third-party grammars, icons and libraries retain their own copyright and licenses.

@@ -1,191 +1,11 @@
-# Handoff: Qt Code Intelligence (Pyright + Orca + Ctrl+Click)
+# Qt Code Intelligence: maintainer guide
 
-State as of 2026-11-06. Repo: `github.com/tungvu-vms/orca-qt-pack` (private, prepared for public).
-Read `README.md` first (install, settings, SSH, security). This file is the working memory behind it.
+The catalog release is **0.5.0**. Development features described in [README](../README.md)
+are on the development branch and need a separate versioned catalog release.
+See [CONTRIBUTING](../CONTRIBUTING.md) for repeatable builds and checks, and
+[public preparation](PUBLICATION.md) before changing repository visibility.
 
-## Development changes after the initial review (not published)
-
-- Python/PySide6 priority: references (Shift+F12), signature help, document symbols
-  (Ctrl+Shift+O), line navigation (Ctrl+G), semantic occurrences and local-only F2 rename.
-  `ide-providers.ts` registers Monaco providers; `protocol.ts` defines their contracts.
-- Rename returns edits to Monaco, never writes files. Reject cross-file changes/file
-  operations atomically; check LSP version and Monaco revision before applying.
-- References/definitions share a URI-to-target navigation map. Register
-  `standaloneReferenceSearch.js`: importing referencesController alone does not enable peek.
-- Monaco 0.52.2 leaves Delayer rejections unobserved when closing references peek.
-  `build.mjs` applies an explicit two-call cancellation patch with Monaco's own error
-  handler; it fails if the upstream source changes. No node_modules edits are required.
-- JSON byte budgets and surrogate-safe uploads live in `transport.ts`. Diagnostics,
-  new results, completion, semantic tokens and peek are bounded. Responses are converted
-  to pure JSON at the core boundary: Orca rejects properties whose value is undefined.
-- Disabled project environments also filter saved and PATH project interpreters;
-  workspace paths are excluded before version probes. SSH receives project-environment
-  and type-checking policy (host-specific executable paths are not forwarded).
-- Tests: `cd lsp-build; npm test; npm run typecheck; npm run test:ui; npm run check:build`.
-  Optional `QT_LSP_TEST_PYTHON` enables real PySide6 integration; `QT_LSP_BROWSER` selects
-  a browser. CI covers source checks and complete generated bundle parity.
-- Version remains 0.5.0. These changes are development-only; catalog publication needs
-  a release decision. Python formatting/Quick Fix, workspace rename and DAP debugging
-  remain separate follow-up work.
-- Review regressions now cover read-only peek editors, discarded buffers, actual
-  byte-window coverage in large targets, refreshed previews, stale rename results,
-  pending keystrokes during resync, and serialized SSH policy reloads. A full snapshot
-  consumes queued edits that are already incorporated, preventing duplicate text.
-- Quiet Python diagnostics: basedpyright 1.40 requests the root `basedpyright`
-  configuration section and then reads `.analysis`; answering only `.analysis`
-  sections silently left the server at `recommended`. Root sections now receive
-  nested analysis options. In `off`, surface syntax and missing imports only.
-  Boolean `pythonDiagnostics` controls all Python markers/diagnostic hover text;
-  F1 → Python: Toggle Diagnostics persists it, synchronizes open frames and leaves
-  completion/navigation enabled. The toggle does not restart SSH agents.
-- Large-file regression: a user's 2381-line / 138537-byte file exposed that the old
-  700k request budget used the result limit by mistake. Inputs now budget 48k bytes;
-  uploads use <=36k serialized-byte pieces, with surrogate boundaries preserved.
-  Initial large opens read disk. Initial/restart full syncs run on the incremental
-  edit queue; keystrokes arriving during initialization or upload are preserved.
-  Navigation retries `rate_limited` according to retryAfterMs within its deadline.
-  Run `npm run test:ui:large`; the harness enforces 64 KiB with structured-clone accounting.
-- Latency regression: concurrent initialization previously spawned six basedpyright
-  processes for the same VMS root, each scanning the workspace. `starting` shares one
-  in-flight startup per language/root; stopping a server invalidates its pending entry.
-  Python indexing defaults exclude build/dist/out, environments and `.worktrees`.
-  Hover/definition use request IDs and LSP cancellation when Monaco cancels; canceled
-  requests also stop retrying admission. Semantic refresh is scoped/debounced per file.
-  `dev/perf-worker.ps1 -Path <file> -Words @('symbol')` measures real worker round trips
-  including CLI overhead. Browser real-file mode uses QT_LSP_UI_FILE, QT_LSP_UI_ROOT,
-  QT_LSP_UI_SYMBOL and QT_LSP_TEST_PYTHON, reading source without writing it. Its Ctrl+Click
-  metric ends at the reveal callback, before actual Orca tab opening. On the VMS file,
-  measured first cold click ~7.5 s, subsequent clicks ~95 ms; do not claim instant cold startup.
-- Sustained-navigation regression: per-target-line Monaco model URIs retained a
-  fresh copy of a large preview at each Ctrl-hover, growing from ~9 to ~28 MiB
-  after 20 to 80 targets even after GC. Preview URIs now identify actual returned
-  windows/full files. LRU bounds idle models to six / 4 MiB text storage, with live
-  model references pinned and evicted targets rehydrated through the resolver.
-  Stress checks retained ~4 MiB for 80 symbols in one large file and ~5 MiB across
-  80 large target files. These are isolated editor heap measurements, not proof
-  that every cause of whole-app lag is fixed. `npm run test:ui:stress` guards both.
-  `monaco-workarounds.mjs` also releases a model reference that arrives after a
-  reference group was closed, and duplicates from concurrent group resolution.
-  The resolver pins models before asynchronous acquisition to prevent eviction races.
-- Idle-worker navigation recovery: document-read RPCs now carry the editor revision.
-  A fresh/restarted worker requests resync instead of answering against disk at draft
-  coordinates. The frame coalesces recovery on the edit queue, reuploads the unsaved
-  draft and retries once. No disk save is performed. Browser regression replaces the
-  source with an unsaved class import/call, restarts the real core and verifies that
-  Ctrl+Click still opens its definition. A real-file mode can check every occurrence
-  using QT_LSP_UI_ALL_POSITIONS=1 (used for SettingScreenQSettings in VMS.py).
-- Explicit Ctrl/Cmd-click now records the modifier at mouse-down and performs the
-  navigation on a short, unmodified-in-content mouse-up even if Ctrl was released
-  first. Monaco's native gesture discarded this case. The capture handler owns the
-  click to avoid duplicate native navigation, clears state after outside release,
-  blur/cancellation/new press, and cancels lookup after content edits. Workspace
-  clicks open through reveal directly, without waiting for a hover preview; F12
-  and library/remote peek remain available. Only explicit clicks/reveals emit
-  `[navigation]` logs so missing input vs lookup vs tab opening can be distinguished.
-  Regressions cover early Ctrl release, blocked preview and stale outside presses.
-
-## Performance work in the development branch
-
-Ctrl/Cmd-click on a declaration now matches VS Code's alternative definition
-action: when the sole definition contains the click in the current file, invoke
-the existing Peek References action instead of navigating back to the same range.
-Shift+F12 remains available anywhere on the symbol. A real-server browser check
-asserts that a declaration lists an importing/calling file and double-clicking
-its usage opens the correct file/line. The original definition/F12 tests still pass.
-On real privacy.py / PrivacyCleanupError, a cold core returned six same-file
-locations; ignored test files were absent initially (the project's .gitignore
-excludes tests). A warm native server also found test/artifact references. Keep
-this indexing distinction explicit; the plugin does not override project excludes.
-
-Hidden frames defer grammar/LSP startup, pause reads/diagnostics/semantic refresh,
-coalesce hidden drafts, and resume without a disk save. Preserve the initial
-attachment snapshot before the visibility wait. `EditorActivity` combines page
-visibility and intersection so CSS-hidden parent frames are covered too.
-
-Python now uses file cancellation with scoped cleanup, enabling basedpyright's
-background analyzer. TextMate/Oniguruma run in a separate lazy grammar worker;
-the frame uses Monaco 0.52.2's pinned background-tokenization store and a bounded
-cheap cache. Hidden workers terminate after 30 seconds; final model disposal
-releases a worker immediately. Worker failure restores built-in Python/C++ tokens
-and permits retry. These workers/mirrors can use more RAM than synchronous parsing;
-no full-app RAM reduction has been established.
-
-New gates: `npm run test:ui:activity`, `npm run test:ui:lifecycle`,
-`npm run test:ui:textmate`. Measured 30 model cycles retained ~1 MiB frame heap
-after GC with no remaining grammar workers; 30 iframe cycles retained ~0.05 MiB
-parent heap. Normal/large/80+80 preview checks pass; see
-[the performance ledger](superpowers/plans/2026-11-06-performance.md) for actual
-latencies, review fixes, limits and native evidence. Version/catalog stay 0.5.0.
-
-## Research follow-up: VS Code responsiveness
-
-The public VS Code/basedpyright client differs from the current plugin in several
-ways that should be measured before adding a custom project-wide index:
-
-1. **File-based cancellation and background analysis.** In basedpyright 1.40.2,
-   `server.ts:createBackgroundAnalysis` returns no background analyzer unless
-   `getCancellationFolderName()` is configured. The VS Code client passes
-   `--cancellationReceive=file:<unique-folder>` and writes per-request cancellation
-   files. This lets running synchronous analysis observe cancellation without
-   waiting to read a JSON-RPC notification. The development branch now implements
-   that lifecycle in the shared local/SSH client, and a real-server regression
-   confirms its background analyzer starts. Total server memory still needs a
-   controlled comparison; moving analysis off-thread is not a RAM reduction claim.
-2. **Incremental synchronization.** Editor-to-worker changes are incremental, but
-   worker-to-server `sendFull` still sends full document text. Consider LSP range
-   edits with CRLF/UTF-16 tests and full resync only for recovery.
-3. **Definition request reuse and preview loading.** Share matching in-flight
-   queries; any result cache must invalidate on relevant source/dependency changes.
-   Explicit Ctrl-click now skips `lsp.peek` before opening workspace targets. Separate
-   location lookup, preview loading and actual Orca CLI tab-open timings.
-4. **Indexing scope.** Pylance's symbol index mainly supports auto-imports and
-   workspace symbol search. Semantic navigation also needs the analyzer's import
-   graph and type results. Pylance documents a default limit of 2000 user *files*,
-   not lines, and persisted indices for third-party libraries, not user-file indices.
-   These Pylance-specific settings are not automatically supported by basedpyright.
-
-Use a representative cold/warm benchmark on the real VMS project. Record P50/P95
-for lookup, preview and tab-visible separately, including edits and dependency
-changes. A warm lookup P95 below 200 ms is a proposed target, not a measured guarantee.
-
-Primary sources checked:
-- [basedpyright 1.40.2 server background gate](https://github.com/DetachHead/basedpyright/blob/v1.40.2/packages/pyright-internal/src/server.ts#L33)
-- [basedpyright VS Code cancellation strategy](https://github.com/DetachHead/basedpyright/blob/v1.40.2/packages/vscode-pyright/src/cancellationUtils.ts#L69)
-- [VS Code definition-link behavior](https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/gotoSymbol/browser/link/goToDefinitionAtPosition.ts)
-- [Pyright analyzer architecture](https://github.com/microsoft/pyright/blob/main/docs/internals.md)
-- [Pylance indexing](https://github.com/microsoft/pylance-release/blob/main/docs/settings/python_analysis_indexing.md)
-- [Pylance index persistence](https://github.com/microsoft/pylance-release/blob/main/docs/settings/python_analysis_persistAllIndices.md)
-
-### Reusable VS Code components and embedding options
-
-The current plugin already embeds Monaco (the editor extracted from VS Code),
-vscode-textmate and vscode-oniguruma. Adding a full VS Code workbench is a different
-integration project; it is not an established performance fix for this plugin.
-
-| Component | Useful role here | Integration limits / performance evidence |
-| --- | --- | --- |
-| [Microsoft Monaco](https://github.com/microsoft/monaco-editor) | Existing editor, providers, undo, peek and editor workers | Only its public API is versioned; private services need pinned compatibility. Monaco does not directly run arbitrary VS Code extensions. |
-| [Microsoft vscode-jsonrpc / language-server-protocol](https://github.com/microsoft/vscode-languageserver-node) | Replace hand-written stdio framing/request bookkeeping with a maintained transport/protocol implementation | vscode-jsonrpc is standalone. The full vscode-languageclient targets the VS Code extension environment; an Orca adapter is still needed. No automatic analyzer speedup should be claimed. |
-| [CodinGame monaco-vscode-api](https://github.com/CodinGame/monaco-vscode-api) | Selective VS Code model/files/configuration/TextMate services; model references dispose when unused | Requires virtual filesystem and host adaptation. Keep Orca's document sessions as the persistence owner; do not add a competing save path. More services/extension hosts may increase startup and memory; benchmark a small spike first. |
-| [TypeFox monaco-languageclient](https://github.com/TypeFox/monaco-languageclient) | Established Monaco-to-language-server integration and examples | Current documented stack aligns with Monaco 0.57.0, while this plugin uses 0.52.2. Migration requires a compatibility upgrade and adaptation to Orca's framed bridge, not a drop-in import. |
-| [TextMate worker service](https://github.com/CodinGame/monaco-vscode-api/wiki/Getting-started-guide) | Move heavy grammar work away from the UI thread | Development now offloads its custom grammar to textmate.worker.ts through Monaco 0.52.2's background store. This avoids the larger service migration; worker messaging and model mirrors still have costs. |
-
-Continue full-app resource profiling and consider transport/model-service migration
-where it removes custom lifecycle logic. Shared editor/model services across Orca's separate isolated
-file frames require host support; placing another full runtime in each frame does
-not create sharing automatically.
-
-Keep language-specific engines: [clangd](https://clangd.llvm.org/design/indexing)
-already has dynamic/background indices and persistent .idx shards driven by
-compile_commands.json. [qmlls](https://doc.qt.io/qt-6/qtqml-tooling-qmlls.html) needs
-the right Qt kit, import/build paths and generated type information. A generic
-VS Code UI does not replace these engines or their project configuration.
-
-The development manifest now uses `priority: default` for all three LSP editors,
-as requested. Existing tabs/preferences can retain their chosen view; Source is
-still available. The published main catalog remains a separate release.
-
-## What it is
+## Architecture
 
 `plugins/qt-lsp` = Orca plugin **Qt Code Intelligence** (`tungvu-vms.qt-dev-python-lsp`, v0.5.0).
 `trusted-worker` + three custom editors (`Python (LSP)`, `QML (LSP)`, `C++ (LSP)`, `priority: default`).
@@ -202,7 +22,7 @@ Source lives in `lsp-build/src`, built into `plugins/qt-lsp` by `cd lsp-build &&
 | `remote.ts`, `agent.ts`, `probe-script.ts` | SSH: read-only probe on `~/.ssh/config` hosts, then copy `agent-<sha>.mjs` to `~/.orca-qt-lsp` on the host that has the file |
 | `pyright-install.ts` | npm-installs `basedpyright@1.40.2` next to the node it finds |
 
-## Hard constraints learned the hard way
+## Integration constraints
 
 - **Custom-editor frames never receive the file path** (Orca design). The worker finds the file by content:
   editor sends sha1(LF text) + UTF-8 size (LF and CRLF); worker indexes workspaces by **size only** (stat, BFS,
@@ -230,18 +50,18 @@ Source lives in `lsp-build/src`, built into `plugins/qt-lsp` by `cd lsp-build &&
 
 ## Security posture (keep it)
 
-From the pre-publication review (all fixed in 0.5.0):
+Maintain these controls in both local and SSH execution:
 - never execute a file from the opened project to read its version; `.vscode`/pyrightconfig interpreters must sit
   in a real env (`pyvenv.cfg`/`conda-meta`); setting *Use project environments* (off = installed Pythons only);
 - clangd `--query-driver` limited to toolchain folders (+ setting `compilerGlobs`), never `**/*gcc*`;
 - SSH host names validated (`isValidHost`) and passed after `--`; remote node path validated;
 - auto SSH search can be turned off and never guesses from files < 64 bytes;
 - `lsp.peek` only reads files returned by go-to-definition in this session;
-- Qt Tools quoting doubles typographic quotes PowerShell treats as `'`.
+- Qt Tools quoting doubles typographic quotes that PowerShell treats as `'`.
 
 ## Test and release
 
-- E2E against a running Orca (Windows): `lsp-build/dev/e2e-worker.ps1`, `e2e-qt.ps1`, `interp-e2e.ps1`
+- E2E against a running Orca (Windows): `lsp-build/dev/e2e-worker.ps1` and `e2e-qt.ps1`
   (load the dev plugin first: `orca plugin dev load plugins/qt-lsp`; results in `%TEMP%\lsp-e2e*.txt`).
   Remote: `node lsp-build/dev/remote-e2e.mjs <ssh-host> '<{hash,size,sizeCrlf}>' <line> <col>`.
 - Qt Tools: `orca plugin test plugins/qt-tools` (11 tests).
@@ -250,12 +70,72 @@ From the pre-publication review (all fixed in 0.5.0):
   `node tools/build-catalog.mjs --url https://github.com/tungvu-vms/orca-qt-pack.git --owner tungvu-vms`,
   commit `orca-catalog.json`, push. Installed copies update via Settings → Plugins → ↻ → Updates.
 
-## Open items / ideas
 
-1. Tab-open for Ctrl+Click into files **outside** any workspace (stdlib/typeshed) is impossible with the current
-   Orca plugin API — would need an Orca feature (open arbitrary path / editor.open with line).
-2. Bundles `editor/assets/chunk-*.js` (2.2 MiB) and `editor.js` (1.3 MiB) exceed the 1 MiB soft warning; consider
-   trimming Monaco contributions.
-3. Remote files: Ctrl+Click across hosts stays in peek (Orca cannot open a tab for another host's file via plugin).
-4. Lockfile and CI bundle checks are present in the development checkout; run the workflow after publishing the branch.
-5. Before going public: decide commit author email (history still shows the company address).
+## Editor lifecycle and navigation
+
+`editor-activity.ts` combines document visibility and viewport intersection, including
+CSS-hidden parent frames. Monaco and the document model exist before first activation;
+grammar/LSP startup waits until visible. Hidden editors coalesce draft changes and
+pause new reads, diagnostics rendering and semantic refresh. Resume synchronizes the
+latest draft without a disk save. Retain the initial document snapshot for hash
+attachment if the hidden draft changes before activation.
+
+`textmate.worker.ts` evaluates TextMate/Oniguruma away from the UI thread. The pinned
+Monaco 0.52.2 background-tokenization bridge rejects stale revisions, batches updates,
+and bounds the frame cache to 2000 entries / approximately 4 MiB per language. Grammar
+imports are lazy. Workers stop after 30 seconds hidden or when the last model closes.
+Failures restore built-in Python/C++ tokenizers and permit retry; QML has no built-in
+fallback. Cooperative regex budgets are 50 ms plus one 200 ms retry; incomplete states
+are discarded. Lines over 20000 UTF-16 units receive approximate coloring while retaining
+the incoming multiline state. These limits do not provide a hard regex time ceiling.
+
+Python's `--cancellationReceive=file:orca-<unique>` argument enables basedpyright's
+background analyzer. The shared client writes per-request cancellation markers on abort
+and timeout; late responses remove them. Only the owning temporary folder is removed
+after process exit. Other language servers use ordinary JSON-RPC cancellation.
+
+Ctrl/Cmd-click captures the modifier at mouse-down and opens workspace definitions
+without waiting for a hover preview. If the only definition contains the clicked
+position in the current file, use Monaco's Peek References action. Shift+F12 remains
+available. References are limited to files known to the language server; project ignores
+can exclude files. Idle-worker recovery resynchronizes the unsaved revision before lookup.
+
+Preview models reuse actual returned windows, with live references pinned and an idle
+LRU capped at six models / 4 MiB text. A result arriving after disposal must release its
+reference. `monaco-workarounds.mjs` checks and patches known upstream lifecycle defects;
+revalidate the patch and private service APIs before upgrading Monaco.
+
+## Measurements and limitations
+
+Repeatable browser checks exercise 2400-line files, 80 previews in one target and across
+80 large files, 30 editor/model cycles, and 30 iframe cycles. Representative local runs
+retained roughly 4–7 MiB after preview stress, ~1 MiB after model cycles, and less than
+0.1 MiB in the parent after iframe cycles, following GC. Closed editors left no grammar
+workers. These are isolated regression measurements, not total Orca memory or an
+hours-long soak test. Background analysis and model mirrors can consume additional RAM.
+Cold project lookups can take several seconds; warm definition callbacks in one large
+project measured ~0.1 seconds. Callback timing excludes native tab display latency.
+
+## Further work
+
+- Opening files outside every workspace or on another host remains a peek until Orca
+  offers a suitable tab-open API.
+- The shared Monaco chunk is approximately 2.20 MiB and exceeds the 1 MiB soft warning.
+  Profile contributions before trimming; keep navigation, completion and peek covered.
+- Editor-to-worker changes are incremental; worker-to-language-server synchronization
+  still sends full text. Range edits need CRLF/UTF-16 regression coverage.
+- Workspace rename, formatting/Quick Fix and debugger support are separate features.
+
+## Primary references
+
+- [basedpyright background analyzer gate](https://github.com/DetachHead/basedpyright/blob/v1.40.2/packages/pyright-internal/src/server.ts)
+- [basedpyright file cancellation](https://github.com/DetachHead/basedpyright/blob/v1.40.2/packages/vscode-pyright/src/cancellationUtils.ts)
+- [VS Code definition navigation](https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/gotoSymbol/browser/goToCommands.ts)
+- [Pyright analyzer design](https://github.com/microsoft/pyright/blob/main/docs/internals.md)
+- [clangd indexing](https://clangd.llvm.org/design/indexing)
+- [Qt QML language server](https://doc.qt.io/qt-6/qtqml-tooling-qmlls.html)
+
+The plugin already uses Monaco, vscode-textmate and vscode-oniguruma. A full VS Code
+workbench or additional extension hosts do not automatically improve resource use.
+Compare selective services or transport migrations against the current architecture,
+keeping Orca document sessions as the sole persistence owner.

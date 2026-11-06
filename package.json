@@ -1,19 +1,24 @@
 {
   "name": "orca-qt-pack",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Qt, QML, PySide6 and C++ developer plugins for Orca",
+  "private": true,
+  "author": "Tùng Vũ",
+  "engines": { "node": ">=24" },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "check:repo": "node --test tools/check-repository.test.mjs && node tools/check-repository.mjs",
+    "typecheck": "tsc -p plugins/qt-tools && npm --prefix lsp-build run typecheck",
+    "test": "npm --prefix lsp-build test",
+    "test:syntax": "node tools/tokenize-check.mjs plugins/qt-syntax samples/demo-app/ui/mainwindow.ui samples/demo-app/app.qrc",
+    "check": "npm run check:repo && npm run typecheck && npm test && npm --prefix lsp-build run check:build && npm run test:syntax"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/tungvu-vms/orca-qt-pack.git" },
   "type": "commonjs",
   "devDependencies": {
-    "@types/node": "^22.9.0",
-    "typescript": "^5.6.3",
-    "vscode-oniguruma": "^2.0.1",
-    "vscode-textmate": "^9.2.0"
+    "@types/node": "22.9.0",
+    "typescript": "5.6.3",
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.2.0"
   }
 }

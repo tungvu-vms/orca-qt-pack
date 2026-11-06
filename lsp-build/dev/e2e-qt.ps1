@@ -1,5 +1,5 @@
 # Tests the real LSP worker in Orca for QML (qmlls) and C++ (clangd) on samples/qt-quick-app.
-# Usage: pwsh lsp-build/dev/e2e-qt.ps1   (plugin loaded with `orca plugin dev`; run make-qt-sample.ps1 first; output in %TEMP%\lsp-e2e-qt.txt)
+# Usage: pwsh lsp-build/dev/e2e-qt.ps1   (load the dev plugin; uses the checked-in sample; output in %TEMP%\lsp-e2e-qt.txt)
 $repo = Resolve-Path "$PSScriptRoot\..\.."
 $key = 'local.qt-dev-python-lsp'
 $root = Join-Path $repo 'samples\qt-quick-app'

@@ -1,11 +1,11 @@
 // Builds the qt-lsp plugin into ../plugins/qt-lsp:
 //   editor/{python,qml,cpp}.html + assets/*.js|css   Monaco + LSP providers (isolated frame), shared JS, different data-lang
 //   worker/worker.mjs                            Node worker (LSP client, file path lookup)
-//   server/pyright/*                             Pyright (MIT) copied as-is from npm
-// Every file <= 1 MiB (Orca's limit); larger output is split into chunks.
+// Language servers are installed separately, not bundled.
+// 1 MiB is a per-file soft warning; the plugin folder limit is 50 MiB / 2000 files.
 // Usage: npm ci --ignore-scripts && node build.mjs
 import { build } from 'esbuild'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { workerPlugin } from './worker-build.mjs'
 import { monacoWorkarounds } from './monaco-workarounds.mjs'
