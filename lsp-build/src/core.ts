@@ -233,7 +233,7 @@ export function createCore(host: CoreEnv): Core {
   async function startServer(lang: Lang, root: string, file?: string): Promise<Server> {
     const { cmd, args, env, detail } = await commandFor(lang, root)
     host.log(`spawn ${lang}: ${cmd} ${args.join(' ')} (root ${root})`)
-    const client = new LspClient(cmd, args, lang === 'python' ? pluginDir() : root, env)
+    const client = new LspClient(cmd, args, lang === 'python' ? pluginDir() : root, env, { fileCancellation: lang === 'python' })
     client.log = (l) => host.log(`[${lang}] ${l}`)
     const srv: Server = { lang, root, client, ready: Promise.resolve(), open: new Map(), diagnostics: new Map(), legend: null, interpreter: null, detail, capabilities: {} }
     client.onExit = (code) => { host.log(`${lang} server exited (${code}) for ${root}`); if (servers.get(key(lang, root)) === srv) servers.delete(key(lang, root)) }

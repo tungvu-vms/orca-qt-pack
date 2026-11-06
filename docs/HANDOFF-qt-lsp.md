@@ -1,6 +1,6 @@
 # Handoff: Qt Code Intelligence (Pyright + Orca + Ctrl+Click)
 
-State as of 2026-11-05. Repo: `github.com/tungvu-vms/orca-qt-pack` (private, prepared for public).
+State as of 2026-11-06. Repo: `github.com/tungvu-vms/orca-qt-pack` (private, prepared for public).
 Read `README.md` first (install, settings, SSH, security). This file is the working memory behind it.
 
 ## Development changes after the initial review (not published)
@@ -84,7 +84,29 @@ Read `README.md` first (install, settings, SSH, security). This file is the work
   `[navigation]` logs so missing input vs lookup vs tab opening can be distinguished.
   Regressions cover early Ctrl release, blocked preview and stale outside presses.
 
-## Research follow-up: VS Code responsiveness (not implemented)
+## Performance work in the development branch
+
+Hidden frames defer grammar/LSP startup, pause reads/diagnostics/semantic refresh,
+coalesce hidden drafts, and resume without a disk save. Preserve the initial
+attachment snapshot before the visibility wait. `EditorActivity` combines page
+visibility and intersection so CSS-hidden parent frames are covered too.
+
+Python now uses file cancellation with scoped cleanup, enabling basedpyright's
+background analyzer. TextMate/Oniguruma run in a separate lazy grammar worker;
+the frame uses Monaco 0.52.2's pinned background-tokenization store and a bounded
+cheap cache. Hidden workers terminate after 30 seconds; final model disposal
+releases a worker immediately. Worker failure restores built-in Python/C++ tokens
+and permits retry. These workers/mirrors can use more RAM than synchronous parsing;
+no full-app RAM reduction has been established.
+
+New gates: `npm run test:ui:activity`, `npm run test:ui:lifecycle`,
+`npm run test:ui:textmate`. Measured 30 model cycles retained ~1 MiB frame heap
+after GC with no remaining grammar workers; 30 iframe cycles retained ~0.05 MiB
+parent heap. Normal/large/80+80 preview checks pass; see
+[the performance ledger](superpowers/plans/2026-11-06-performance.md) for actual
+latencies, review fixes, limits and native evidence. Version/catalog stay 0.5.0.
+
+## Research follow-up: VS Code responsiveness
 
 The public VS Code/basedpyright client differs from the current plugin in several
 ways that should be measured before adding a custom project-wide index:
@@ -94,16 +116,16 @@ ways that should be measured before adding a custom project-wide index:
    `getCancellationFolderName()` is configured. The VS Code client passes
    `--cancellationReceive=file:<unique-folder>` and writes per-request cancellation
    files. This lets running synchronous analysis observe cancellation without
-   waiting to read a JSON-RPC notification. The plugin still launches with only
-   `--stdio`; its current `$/cancelRequest` support does not enable this worker.
-   Implement cancellation-file lifecycle on the language-server machine, including
-   SSH agents, then measure foreground responsiveness and memory before claiming a gain.
+   waiting to read a JSON-RPC notification. The development branch now implements
+   that lifecycle in the shared local/SSH client, and a real-server regression
+   confirms its background analyzer starts. Total server memory still needs a
+   controlled comparison; moving analysis off-thread is not a RAM reduction claim.
 2. **Incremental synchronization.** Editor-to-worker changes are incremental, but
    worker-to-server `sendFull` still sends full document text. Consider LSP range
    edits with CRLF/UTF-16 tests and full resync only for recovery.
 3. **Definition request reuse and preview loading.** Share matching in-flight
    queries; any result cache must invalidate on relevant source/dependency changes.
-   `resolveLocations` currently waits for `lsp.peek` before opening a target. Separate
+   Explicit Ctrl-click now skips `lsp.peek` before opening workspace targets. Separate
    location lookup, preview loading and actual Orca CLI tab-open timings.
 4. **Indexing scope.** Pylance's symbol index mainly supports auto-imports and
    workspace symbol search. Semantic navigation also needs the analyzer's import
@@ -135,11 +157,10 @@ integration project; it is not an established performance fix for this plugin.
 | [Microsoft vscode-jsonrpc / language-server-protocol](https://github.com/microsoft/vscode-languageserver-node) | Replace hand-written stdio framing/request bookkeeping with a maintained transport/protocol implementation | vscode-jsonrpc is standalone. The full vscode-languageclient targets the VS Code extension environment; an Orca adapter is still needed. No automatic analyzer speedup should be claimed. |
 | [CodinGame monaco-vscode-api](https://github.com/CodinGame/monaco-vscode-api) | Selective VS Code model/files/configuration/TextMate services; model references dispose when unused | Requires virtual filesystem and host adaptation. Keep Orca's document sessions as the persistence owner; do not add a competing save path. More services/extension hosts may increase startup and memory; benchmark a small spike first. |
 | [TypeFox monaco-languageclient](https://github.com/TypeFox/monaco-languageclient) | Established Monaco-to-language-server integration and examples | Current documented stack aligns with Monaco 0.57.0, while this plugin uses 0.52.2. Migration requires a compatibility upgrade and adaptation to Orca's framed bridge, not a drop-in import. |
-| [TextMate worker service](https://github.com/CodinGame/monaco-vscode-api/wiki/Getting-started-guide) | Move heavy grammar work away from the UI thread | Current textmate.ts calls tokenizeLine synchronously in the frame. Its existing editor.worker does not offload that custom tokenizer. Profile typing before/after; worker messaging and model mirrors also have costs. |
+| [TextMate worker service](https://github.com/CodinGame/monaco-vscode-api/wiki/Getting-started-guide) | Move heavy grammar work away from the UI thread | Development now offloads its custom grammar to textmate.worker.ts through Monaco 0.52.2's background store. This avoids the larger service migration; worker messaging and model mirrors still have costs. |
 
-Prioritize a measured file-cancellation/background-analysis prototype and UI-thread
-tokenization profiling, then transport/model-service migration where it removes
-custom lifecycle logic. Shared editor/model services across Orca's separate isolated
+Continue full-app resource profiling and consider transport/model-service migration
+where it removes custom lifecycle logic. Shared editor/model services across Orca's separate isolated
 file frames require host support; placing another full runtime in each frame does
 not create sharing automatically.
 

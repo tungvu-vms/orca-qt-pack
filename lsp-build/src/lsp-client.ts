@@ -1,5 +1,8 @@
 // Minimal LSP client over stdio (JSON-RPC, Content-Length). Runs in the plugin's Node worker.
 import { spawn, type ChildProcess } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join, resolve } from 'node:path'
 
 type Handler = (params: any) => any
 
@@ -10,11 +13,19 @@ export class LspClient {
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; cleanup: () => void }>()
   private notifyHandlers = new Map<string, Handler>()
   private requestHandlers = new Map<string, Handler>()
+  private cancellationFolder?: string
+  private cancelled = new Set<number>()
   exited = false
   onExit?: (code: number | null) => void
   log: (line: string) => void = () => {}
 
-  constructor(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv) {
+  constructor(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv, options?: { fileCancellation?: boolean }) {
+    if (options?.fileCancellation) {
+      const base = join(tmpdir(), 'python-languageserver-cancellation')
+      mkdirSync(base, { recursive: true })
+      this.cancellationFolder = mkdtempSync(join(base, 'orca-'))
+      args = [...args, `--cancellationReceive=file:${basename(this.cancellationFolder)}`]
+    }
     this.proc = spawn(command, args, { cwd, env: env ?? process.env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
     this.proc.stdout!.on('data', (d: Buffer) => this.onData(d))
     this.proc.stderr!.on('data', (d: Buffer) => this.log(`[stderr] ${d.toString().trim().slice(0, 500)}`))
@@ -22,9 +33,16 @@ export class LspClient {
       this.exited = true
       for (const p of this.pending.values()) { p.cleanup(); p.reject(new Error('language server exited')) }
       this.pending.clear()
+      this.clearCancellationFolder()
       this.onExit?.(code)
     })
-    this.proc.on('error', (e) => this.log(`[spawn] ${e.message}`))
+    this.proc.on('error', (e) => {
+      this.log(`[spawn] ${e.message}`)
+      this.exited = true
+      for (const p of this.pending.values()) { p.cleanup(); p.reject(e) }
+      this.pending.clear()
+      this.clearCancellationFolder()
+    })
   }
 
   onNotification(method: string, h: Handler) { this.notifyHandlers.set(method, h) }
@@ -39,13 +57,13 @@ export class LspClient {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         cleanup()
-        this.notify('$/cancelRequest', { id })
+        this.cancelRequest(id)
         reject(new Error(`${method} timed out`))
       }, timeoutMs)
       const cancel = () => {
         if (!this.pending.delete(id)) return
         cleanup()
-        this.notify('$/cancelRequest', { id })
+        this.cancelRequest(id)
         reject(aborted())
       }
       const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel) }
@@ -60,6 +78,26 @@ export class LspClient {
   }
 
   kill() { try { this.proc.kill() } catch { /* already exited */ } }
+
+  private cancelRequest(id: number) {
+    if (this.cancellationFolder) {
+      try {
+        writeFileSync(join(this.cancellationFolder, `cancellation-${id}.tmp`), '')
+        this.cancelled.add(id)
+      } catch (e) { this.log(`[cancellation] ${String(e)}`) }
+    }
+    this.notify('$/cancelRequest', { id })
+  }
+
+  private clearCancellationFolder() {
+    const folder = this.cancellationFolder
+    // Never recurse outside the unique folder allocated by this client.
+    if (folder && dirname(resolve(folder)) === resolve(tmpdir(), 'python-languageserver-cancellation') && basename(folder).startsWith('orca-')) {
+      try { rmSync(folder, { recursive: true, force: true }) } catch { /* best effort after exit */ }
+    }
+    this.cancellationFolder = undefined
+    this.cancelled.clear()
+  }
 
   private write(msg: unknown) {
     const s = JSON.stringify(msg)
@@ -85,6 +123,9 @@ export class LspClient {
 
   private dispatch(msg: any) {
     if (msg.id !== undefined && msg.method === undefined) {
+      if (this.cancelled.delete(msg.id) && this.cancellationFolder) {
+        try { rmSync(join(this.cancellationFolder, `cancellation-${msg.id}.tmp`), { force: true }) } catch { /* exit cleanup retries */ }
+      }
       const p = this.pending.get(msg.id)
       if (!p) return
       this.pending.delete(msg.id)

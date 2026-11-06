@@ -29,6 +29,8 @@ import type { AttachOutput, CompletionOutput, DefinitionOutput, DiagnosticsOutpu
 import { registerIdeProviders } from './ide-providers'
 import { chunkText, messageBytes, REQUEST_BUDGET } from './transport'
 import { DOCUMENT_READ_METHODS } from './protocol'
+import { EditorActivity } from './editor-activity'
+import { trackTextMateActivity } from './textmate-background'
 
 declare const orca: import('orca/frame').OrcaFrameApi
 
@@ -44,11 +46,14 @@ const setStatus = (text: string, tone: 'ok' | 'warn' | 'err' | 'busy' = 'ok') =>
   statusEl.dataset.tone = tone
 }
 let documentSync: { path: string; version(): number; recover(): Promise<void> } | null = null
+let activity: EditorActivity | null = null
 async function req<T>(name: string, input: unknown, timeoutMs = 20000, signal?: AbortSignal): Promise<T> {
+  if (DOCUMENT_READ_METHODS.has(name) && activity && !activity.visible) return null as T
   const clean = JSON.parse(JSON.stringify(input ?? null))
   const deadline = Date.now() + timeoutMs
   let recovered = false
   for (;;) {
+    if (DOCUMENT_READ_METHODS.has(name) && activity && !activity.visible) return null as T
     if (signal?.aborted) throw Object.assign(new Error('Request cancelled'), { name: 'AbortError' })
     try {
       const sync = documentSync && clean?.path === documentSync.path && DOCUMENT_READ_METHODS.has(name) ? documentSync : null
@@ -151,11 +156,14 @@ function applyTheme() {
 
 async function main() {
   // TextMate grammar + Dark+/Light+ theme (as in VS Code); on failure keep Monaco's built-in tokenizer.
-  const textMate = installTextMate(LANG)
   if (!orca.document) throw new Error('Open a Python, QML or C++ file in this editor.')
   const session = await orca.document.session<string>({ debounceMs: 300 })
-  await textMate
+  // Retain the disk-identifying snapshot before deferred startup lets edits arrive.
+  const attachmentText = session.value
   const container = document.getElementById('editor')!
+  activity = new EditorActivity(container)
+  trackTextMateActivity(activity)
+  window.addEventListener('beforeunload', () => activity?.dispose())
   // Unique URI per load: avoids clashing on 'inmemory://model/1' when the frame reloads.
   const mainUri = monaco.Uri.from({ scheme: 'orca-doc', path: '/' + Date.now() + '-' + Math.random().toString(36).slice(2) + ({ python: '.py', qml: '.qml', cpp: '.cpp' } as const)[LANG] })
   const model = monaco.editor.getModel(mainUri) ?? monaco.editor.createModel(session.value, MONACO_LANG, mainUri)
@@ -251,12 +259,15 @@ async function main() {
     }
     pickerFilter.focus()
   }
+  setStatus('Waiting for active tab…', 'busy')
+  await activity.whenVisible()
+  await installTextMate(LANG)
   void req<HostChoice>('lsp.hostChoice', null, 15000).then((c) => showHost(c.chosen && c.chosen !== 'local' ? c.chosen : null, !c.chosen)).catch(() => showHost(null, true))
 
   // --- connect to the worker ---
   setStatus('Looking for the file in the workspace…', 'busy')
   // Frame requests are limited to 64 KiB. Attach by hash, never by sending the file.
-  const lfText = model.getValue().replace(/\r\n/g, '\n')
+  const lfText = attachmentText.replace(/\r\n/g, '\n')
   const lfBytes = new TextEncoder().encode(lfText).length
   const lineBreaks = (lfText.match(/\n/g) ?? []).length
   const att = await req<AttachOutput>('lsp.attach', { language: LANG, hash: await sha1Lf(lfText), size: lfBytes, sizeCrlf: lfBytes + lineBreaks }, 90000).catch((e) => ({ ok: false, path: null, candidates: 0, workspace: null, server: null, message: String(e) }) as AttachOutput)
@@ -392,9 +403,11 @@ async function main() {
   type Edit = { offset: number; length: number; text: string }
   let pendingEvents: Edit[][] = []
   let pendingBytes = 0
+  let fullSyncNeeded = false
   let sending: Promise<void> = Promise.resolve()
   let changeTimer: ReturnType<typeof setTimeout> | undefined
   model.onDidChangeContent((ev) => {
+    if (!activity?.visible) { fullSyncNeeded = true; pendingEvents = []; pendingBytes = 0; return }
     const edits = ev.changes.map((c) => ({ offset: c.rangeOffset, length: c.rangeLength, text: c.text }))
     pendingEvents.push(edits)
     pendingBytes += messageBytes({ path, edits, version: version + 1 })
@@ -402,19 +415,22 @@ async function main() {
     changeTimer = setTimeout(() => { void flushChange().catch(reportError) }, 200)
   })
   const sendPending = async () => {
+    if (!activity?.visible) return
     const events = pendingEvents
-    const big = pendingBytes > REQUEST_BUDGET
+    const big = fullSyncNeeded || pendingBytes > REQUEST_BUDGET
+    fullSyncNeeded = false
     pendingEvents = []
     pendingBytes = 0
-    if (!events.length) return
     // Large paste/replace (e.g. file reload): resend the whole file in chunks
     if (big) { await resyncFull(); return }
+    if (!events.length) return
     for (const edits of events) {
       const r = await req<{ ok: boolean; resync?: boolean }>('lsp.change', { path, edits, version: ++version, expectLength: undefined }).catch(() => ({ ok: false, resync: true }))
       if (!r.ok) { await resyncFull(); return }
     }
   }
   const flushChange = async () => {
+    if (!activity?.visible) return
     if (changeTimer) { clearTimeout(changeTimer); changeTimer = undefined }
     sending = sending.then(sendPending, sendPending)
     await sending
@@ -439,7 +455,7 @@ async function main() {
   let interactiveSequence = 0
   const interactivePrefix = Math.random().toString(36).slice(2)
   async function queryAt<T>(name: string, position: monaco.Position, token: monaco.CancellationToken, extra: object = {}): Promise<T | null> {
-    if (token.isCancellationRequested) return null
+    if (!activity?.visible || token.isCancellationRequested) return null
     const revision = model.getVersionId()
     await flushChange()
     if (token.isCancellationRequested || revision !== model.getVersionId()) return null
@@ -451,7 +467,7 @@ async function main() {
     })
     try {
       const result = await req<T>(name, { path, position: toPos(position), requestId, ...extra }, 20000, controller.signal)
-      return token.isCancellationRequested || revision !== model.getVersionId() ? null : result
+      return !activity?.visible || token.isCancellationRequested || revision !== model.getVersionId() ? null : result
     } catch (e) { if (!token.isCancellationRequested) reportError(e); return null }
     finally { cancel.dispose() }
   }
@@ -689,7 +705,7 @@ async function main() {
   setTimeout(() => semEmitter.fire(), 1500)
   let semanticRefreshTimer: ReturnType<typeof setTimeout> | undefined
   orca.plugin.on('lsp.diagnostics' as any, (p: any) => {
-    if (!sameFile(p.path, path)) return
+    if (!activity?.visible || !sameFile(p.path, path)) return
     clearTimeout(semanticRefreshTimer)
     semanticRefreshTimer = setTimeout(() => semEmitter.fire(), 150)
   })
@@ -747,6 +763,7 @@ async function main() {
   })
   function applyDiagnostics(d: DiagnosticsOutput) {
     lastDiagnostics = d
+    if (!activity?.visible) return
     const items = diagnosticsEnabled ? d.items : []
     monaco.editor.setModelMarkers(model, SERVER, items.map((x) => ({
       ...toRangeObj(x.range),
@@ -760,6 +777,10 @@ async function main() {
     if (statusEl.dataset.tone !== 'err') setStatus(`${SERVER} • ${rel} • ${diagnosticsEnabled ? `${errs} errors, ${warns} warnings` : 'diagnostics off'}`, errs ? 'warn' : 'ok')
   }
   void req<DiagnosticsOutput>('lsp.diagnostics', { path }).then(applyDiagnostics).catch(() => {})
+  activity.onChange((visible) => {
+    if (!visible) { clearTimeout(semanticRefreshTimer); clickRequest?.cancel(); return }
+    void flushChange().then(() => { applyDiagnostics(lastDiagnostics); semEmitter.fire() }).catch(reportError)
+  })
   editor.focus()
 }
 

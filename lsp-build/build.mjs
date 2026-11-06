@@ -7,6 +7,7 @@
 import { build } from 'esbuild'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { workerPlugin } from './worker-build.mjs'
 import { monacoWorkarounds } from './monaco-workarounds.mjs'
 
 const HERE = import.meta.dirname
@@ -15,20 +16,6 @@ const MAX = 1024 * 1024
 
 for (const d of ['editor', 'worker', 'server']) rmSync(path.join(PLUGIN, d), { recursive: true, force: true })
 mkdirSync(path.join(PLUGIN, 'editor', 'assets'), { recursive: true })
-
-// Plugin: ?worker -> build Monaco's worker into its own file and return a Worker class
-const workerPlugin = {
-  name: 'monaco-worker',
-  setup(b) {
-    b.onResolve({ filter: /\?worker$/ }, (args) => ({ path: path.join(HERE, 'node_modules', args.path.replace(/\?worker$/, '')), namespace: 'worker' }))
-    b.onLoad({ filter: /.*/, namespace: 'worker' }, async (args) => {
-      const r = await build({ entryPoints: [args.path], bundle: true, write: false, format: 'iife', minify: true, target: 'chrome120', legalComments: 'none' })
-      const name = 'editor.worker.js'
-      writeFileSync(path.join(PLUGIN, 'editor', 'assets', name), r.outputFiles[0].contents)
-      return { contents: `export default class extends Worker { constructor() { super(new URL('./${name}', import.meta.url)) } }`, loader: 'js' }
-    })
-  }
-}
 
 const page = await build({
   entryPoints: { editor: path.join(HERE, 'src', 'editor.ts') },
@@ -45,7 +32,7 @@ const page = await build({
   assetNames: '[name]-[hash]',
   loader: { '.ttf': 'file', '.wasm': 'base64' },
   external: ['orca/*'],
-  plugins: [workerPlugin, monacoWorkarounds],
+  plugins: [workerPlugin(path.join(PLUGIN, 'editor', 'assets')), monacoWorkarounds],
   metafile: true,
   logLevel: 'warning'
 })

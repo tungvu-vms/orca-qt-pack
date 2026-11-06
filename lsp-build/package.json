@@ -9,6 +9,9 @@
     "test:ui": "node dev/ui-e2e.mjs",
     "test:ui:large": "node dev/ui-e2e.mjs --large",
     "test:ui:stress": "node dev/ui-e2e.mjs --stress && node dev/ui-e2e.mjs --stress-files",
+    "test:ui:activity": "node dev/ui-e2e.mjs --activity",
+    "test:ui:lifecycle": "node dev/ui-e2e.mjs --lifecycle",
+    "test:ui:textmate": "node dev/textmate-ui.mjs",
     "check:build": "node dev/check-build.mjs"
   },
   "dependencies": {

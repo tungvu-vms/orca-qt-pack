@@ -26,3 +26,6 @@ jobs:
       - run: npm run test:ui
       - run: npm run test:ui:large
       - run: npm run test:ui:stress
+      - run: npm run test:ui:activity
+      - run: npm run test:ui:lifecycle
+      - run: npm run test:ui:textmate

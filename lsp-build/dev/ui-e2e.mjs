@@ -23,6 +23,8 @@ mkdirSync(project)
 const realFile = process.env.QT_LSP_UI_FILE
 const path = realFile ? resolve(realFile) : join(project, 'main.py')
 const largeMode = process.env.QT_LSP_LARGE_UI === '1' || process.argv.includes('--large')
+const activityMode = process.argv.includes('--activity')
+const lifecycleMode = process.argv.includes('--lifecycle')
 const evictionMode = process.argv.includes('--stress-files')
 const stressMode = process.argv.includes('--stress') || evictionMode
 const baseText = 'from helper import greet\n\nclass WindowModel:\n    def title(self, name: str) -> str:\n        return greet(name, 2)\n\ndef compute(value: int) -> int:\n    doubled = value * 2\n    return doubled\n\nresult = greet("Qt", 2)\nanswer = compute(21)\n'
@@ -58,7 +60,9 @@ const bridge = `<script>
 const listeners = new Map();
 const settingsListeners = new Set();
 window.__publish = (name, payload) => listeners.get(name)?.(payload);
-window.__session = { value: ${JSON.stringify(documentText)}, readOnly: false, change(value) { this.value = value }, onReplace() { return {dispose(){}} }, flush: async () => {}, dispose() {} };
+let replaceHandler;
+window.__replace = text => { window.__session.value = text; replaceHandler?.(text); };
+window.__session = { value: ${JSON.stringify(documentText)}, readOnly: false, change(value) { this.value = value }, onReplace(fn) {replaceHandler=fn; return {dispose(){}} }, flush: async () => {}, dispose() {} };
 window.orca = { document: {session: async () => window.__session}, on() { return {dispose(){}} },
   settings: {
     async get(key) { return key === 'pythonDiagnostics' ? JSON.parse(localStorage.getItem(key) ?? 'true') : undefined },
@@ -117,6 +121,10 @@ const server = createServer(async (req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=utf-8')
       res.end(readFileSync(join(assets, 'python.html'), 'utf8').replace('<head>', '<head>' + bridge)); return
     }
+    if (req.url === '/activity-parent') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8')
+      res.end('<!doctype html><iframe id="frame" src="/python.html" style="display:none;width:1100px;height:750px"></iframe>'); return
+    }
     const file = resolve(assets, '.' + decodeURIComponent(req.url.split('?')[0]))
     if (!file.startsWith(assets + (process.platform === 'win32' ? '\\' : '/'))) { res.writeHead(403).end(); return }
     const mime = { '.js': 'text/javascript', '.css': 'text/css', '.ttf': 'font/ttf' }[extname(file)] ?? 'application/octet-stream'
@@ -134,7 +142,74 @@ try {
   assert(executablePath, 'Set QT_LSP_BROWSER to an installed Chromium/Chrome/Edge executable')
   browser = await chromium.launch({ executablePath, headless: true })
   page = await browser.newPage({ viewport: { width: 1280, height: 850 } })
+  const grammarWorkers = new Set()
+  page.on('worker', worker => { if (worker.url().includes('textmate.worker.js')) { grammarWorkers.add(worker); worker.on('close', () => grammarWorkers.delete(worker)) } })
   page.on('pageerror', (e) => errors.push(e.stack ?? e.message))
+  if (lifecycleMode) {
+    await page.goto(`http://127.0.0.1:${server.address().port}/activity-parent`)
+    const profiler = await page.context().newCDPSession(page)
+    const heap = async () => { await profiler.send('HeapProfiler.collectGarbage'); return (await profiler.send('Runtime.getHeapUsage')).usedSize }
+    let baseline
+    for (let i = 0; i < 30; i++) {
+      await page.evaluate(() => {
+        const frame = document.getElementById('frame'); frame.style.display = 'block'
+        if (!frame.isConnected) document.body.append(frame)
+      })
+      await page.frameLocator('#frame').locator('#interp:not([hidden])').waitFor({ timeout: 20000 })
+      await page.waitForTimeout(100)
+      await page.evaluate(() => { document.getElementById('frame').remove(); const next=document.createElement('iframe'); next.id='frame';next.src='/python.html';next.style.cssText='display:none;width:1100px;height:750px';document.body.append(next) })
+      await page.waitForTimeout(150)
+      if (i === 0) baseline = await heap()
+      if ((i + 1) % 10 === 0) console.log(JSON.stringify({ phase: 'iframe-open-close', cycles: i + 1, retainedMiB: +(((await heap()) - baseline) / 1048576).toFixed(2) }))
+    }
+    const retained = (await heap()) - baseline
+    assert(retained < 16 * 1048576, `closing iframe editors retained ${(retained/1048576).toFixed(1)} MiB`)
+    for (let i = 0; i < 100 && grammarWorkers.size; i++) await page.waitForTimeout(20)
+    assert.equal(grammarWorkers.size, 0, 'closed editor frames must leave no grammar workers')
+    console.log('PASS iframe lifecycle: 30 built-editor frames opened/closed with bounded parent heap')
+  } else if (activityMode) {
+    await page.goto(`http://127.0.0.1:${server.address().port}/activity-parent`)
+    const child = page.frameLocator('#frame')
+    await page.waitForTimeout(600)
+    const hiddenStartup = calls.filter((c) => c.name === 'lsp.attach' || c.name === 'lsp.open').length
+    console.log(JSON.stringify({ phase: 'hidden-startup', requests: hiddenStartup }))
+    assert.equal(hiddenStartup, 0, 'a CSS-hidden editor must not start its language server')
+    assert.equal(grammarWorkers.size, 0, 'a CSS-hidden editor must not load its grammar worker')
+    const childFrame = page.frames().find((f) => f.url().endsWith('/python.html'))
+    await childFrame.evaluate(text => window.__replace(text), text + '# draft before first activation\n')
+    await page.evaluate(() => document.getElementById('frame').style.display = 'block')
+    await child.locator('#interp:not([hidden])').waitFor({ timeout: 20000 })
+    for (let i = 0; i < 100 && !grammarWorkers.size; i++) await page.waitForTimeout(20)
+    assert.equal(grammarWorkers.size, 1)
+    await page.waitForTimeout(300)
+    await page.evaluate(() => document.getElementById('frame').style.display = 'none')
+    await page.waitForTimeout(100)
+    const start = calls.length
+    for (let i = 0; i < 5; i++) await childFrame.evaluate((path) => window.__publish('lsp.diagnostics', {path,version:1,items:[]}), path)
+    await childFrame.evaluate((text) => window.__replace(text), text + '# replaced while hidden\n')
+    await page.waitForTimeout(500)
+    assert.equal(calls.length, start, 'hidden replacements/diagnostics must not schedule language-server traffic')
+    for (let i = 0; i < 35 && grammarWorkers.size; i++) await page.waitForTimeout(1000)
+    assert.equal(grammarWorkers.size, 0, 'an inactive editor must release its grammar worker after the idle timeout')
+    assert.equal(calls.length, start, 'idle hidden editors must remain quiet')
+    await page.evaluate(() => document.getElementById('frame').style.display = 'block')
+    for (let i = 0; i < 100 && !calls.slice(start).some((c) => c.name === 'lsp.change' && c.result?.ok); i++) await page.waitForTimeout(30)
+    assert(calls.slice(start).some((c) => c.name === 'lsp.change' && c.result?.ok), 'showing the editor must synchronize the latest hidden draft')
+    assert.equal(await childFrame.evaluate(() => window.__session.value), text + '# replaced while hidden\n')
+    assert.equal(calls.filter((c) => c.name === 'lsp.attach').length, 1, 'resume must reuse the existing attachment')
+    for (let i = 0; i < 5; i++) {
+      await page.evaluate(() => document.getElementById('frame').style.display = 'none')
+      await page.waitForTimeout(50)
+      await page.evaluate(() => document.getElementById('frame').style.display = 'block')
+      await page.waitForTimeout(50)
+    }
+    assert.equal(calls.filter((c) => c.name === 'lsp.attach').length, 1, 'rapid show/hide must not duplicate attachment')
+    assert.equal(readFileSync(path, 'utf8'), text)
+    for (let i = 0; i < 100 && !grammarWorkers.size; i++) await page.waitForTimeout(20)
+    assert.equal(grammarWorkers.size, 1, 'resuming an idle frame must restart its grammar worker')
+    console.log('PASS activity: hidden startup defers LSP, hidden traffic pauses, idle worker is released, resume synchronizes the draft')
+    assert.deepEqual(errors, [])
+  } else {
   await page.goto(`http://127.0.0.1:${server.address().port}`)
   await page.waitForFunction((name) => document.getElementById('status').textContent.includes(name), path.split(/[\\/]/).at(-1), { timeout: 30000 })
   // Use the editor's native keyboard commands throughout; positioning uses Ctrl+G.
@@ -489,6 +564,7 @@ try {
   console.log('PASS click state: an outside release does not turn a later plain click into navigation')
   }
 
+  }
   assert.deepEqual(errors, [], 'no uncaught browser errors')
   const capture = process.env.QT_LSP_UI_SHOT
   if (capture) await page.screenshot({ path: capture })

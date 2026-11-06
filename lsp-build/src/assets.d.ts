@@ -19,3 +19,18 @@ declare module 'monaco-editor/esm/vs/platform/commands/common/commands.js' {
 declare module 'monaco-editor/esm/vs/editor/common/services/resolverService.js' {
   export const ITextModelService: unknown
 }
+declare module 'monaco-editor/esm/vs/editor/common/languages.js' {
+  export const TokenizationRegistry: { register(lang: string, support: any): { dispose(): void }; get(lang: string): any; getOrCreate(lang: string): Promise<any> }
+}
+declare module 'monaco-editor/esm/vs/editor/standalone/browser/standaloneLanguages.js' {
+  export const TokenizationSupportAdapter: any
+}
+declare module 'monaco-editor/esm/vs/editor/common/languages/language.js' {
+  export const ILanguageService: unknown
+}
+declare module 'monaco-editor/esm/vs/editor/standalone/common/standaloneTheme.js' {
+  export const IStandaloneThemeService: unknown
+}
+declare module 'monaco-editor/esm/vs/editor/common/tokens/contiguousMultilineTokensBuilder.js' {
+  export const ContiguousMultilineTokensBuilder: any
+}
