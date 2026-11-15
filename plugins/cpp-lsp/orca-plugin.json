@@ -1,0 +1,123 @@
+{
+  "manifestVersion": 2,
+  "id": "cpp-code-intelligence",
+  "name": "C/C++ Code Intelligence",
+  "version": "0.1.0",
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "description": "C and C++ navigation, references, hover, completion and diagnostics through clangd. Works with native projects and compilation databases; Qt is optional.",
+  "license": "MIT",
+  "author": {
+    "name": "Tùng Vũ"
+  },
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "main": "worker/worker.mjs",
+  "contributes": {
+    "events": [
+      {
+        "on": "workspace.removed"
+      }
+    ],
+    "customEditors": [
+      {
+        "id": "cpp-lsp",
+        "title": "C++ (LSP)",
+        "extensions": [
+          ".cpp",
+          ".cc",
+          ".cxx",
+          ".c",
+          ".h",
+          ".hpp",
+          ".hh",
+          ".hxx",
+          ".inl",
+          ".ipp",
+          ".c++",
+          ".tpp",
+          ".tcc",
+          ".ixx",
+          ".cppm"
+        ],
+        "entry": "editor/cpp.html",
+        "priority": "default",
+        "contentKind": "text",
+        "frame": "isolated"
+      }
+    ],
+    "settings": [
+      {
+        "key": "clangdPath",
+        "title": "clangd",
+        "description": "Path to clangd. Empty: PATH first, then known LLVM and Qt Creator installations.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "compilerGlobs",
+        "title": "Extra compiler globs for clangd",
+        "description": "clangd only queries compilers from known toolchain folders (Qt, LLVM, Visual Studio, MSYS2, /usr/bin…) for system include paths, never one inside the project. Add other trusted compiler paths here as globs, separated by commas.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "remoteHosts",
+        "title": "Extra SSH hosts",
+        "description": "Usually empty: when the open file is not on this machine the plugin searches every host in ~/.ssh/config by itself (read-only, in parallel) and remembers the one that has the project. Use the machine button at the bottom of the editor to pick or type a host for a project. Add hosts here only if they are not in ~/.ssh/config (user@host), separated by commas.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "autoFindRemote",
+        "title": "Find files on SSH hosts automatically",
+        "description": "on (default): when the open file is not on this machine, look for it read-only on every host in ~/.ssh/config (key login only, at most 40 hosts, files of 64 bytes or more) and start the agent on the host that has it. off: only use the host picked with the machine button.",
+        "type": "string",
+        "default": "on"
+      },
+      {
+        "key": "remoteRoots",
+        "title": "Remote project folders",
+        "description": "Optional: project folders on the remote hosts to search (separate with ;). Searched anyway: folders used before, Orca's workspaces on that host (when Orca is installed there), then the home folder.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "sshPath",
+        "title": "ssh",
+        "description": "Path to the ssh program. Empty: the system OpenSSH.",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "remoteNode",
+        "title": "Remote node path",
+        "description": "Optional: Node.js on the remote hosts when it is not on the SSH PATH (e.g. /home/me/.nvm/versions/node/v20.11.0/bin/node).",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "compilationDatabase",
+        "title": "Compilation database folder",
+        "description": "Folder containing compile_commands.json. Absolute, or relative to the project root. Empty: discover build folders automatically.",
+        "type": "string",
+        "default": ""
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    },
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "storage:own"
+    }
+  ]
+}

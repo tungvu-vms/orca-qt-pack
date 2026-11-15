@@ -16,14 +16,20 @@ import 'monaco-editor/esm/vs/editor/contrib/linesOperations/browser/linesOperati
 import 'monaco-editor/esm/vs/editor/contrib/gotoError/browser/gotoError.js'
 import 'monaco-editor/esm/vs/editor/contrib/peekView/browser/peekView.js'
 import 'monaco-editor/esm/vs/editor/contrib/gotoSymbol/browser/peek/referencesController.js'
-import 'monaco-editor/esm/vs/basic-languages/python/python.contribution.js'
-import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution.js'
+import { loadLanguageFallbacks } from './editor-language'
 import { installTextMate, semanticToken, textMateRules, type Lang } from './textmate'
 import { StandaloneServices } from 'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'
 import { IConfigurationService } from 'monaco-editor/esm/vs/platform/configuration/common/configuration.js'
+import { ICommandService } from 'monaco-editor/esm/vs/platform/commands/common/commands.js'
+import { ITextModelService } from 'monaco-editor/esm/vs/editor/common/services/resolverService.js'
 import 'monaco-editor/esm/vs/editor/contrib/semanticTokens/browser/documentSemanticTokens.js'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker'
-import type { AttachOutput, CompletionOutput, DefinitionOutput, DiagnosticsOutput, HoverOutput, Pos } from './protocol'
+import type { AttachOutput, CompletionOutput, DefinitionOutput, DiagnosticsOutput, HoverOutput, Loc, Pos } from './protocol'
+import { registerIdeProviders } from './ide-providers'
+import { chunkText, messageBytes, REQUEST_BUDGET } from './transport'
+import { DOCUMENT_READ_METHODS } from './protocol'
+import { EditorActivity } from './editor-activity'
+import { trackTextMateActivity } from './textmate-background'
 
 declare const orca: import('orca/frame').OrcaFrameApi
 
@@ -38,7 +44,41 @@ const setStatus = (text: string, tone: 'ok' | 'warn' | 'err' | 'busy' = 'ok') =>
   statusEl.textContent = text
   statusEl.dataset.tone = tone
 }
-const req = <T>(name: string, input: unknown, timeoutMs = 20000) => orca.plugin.request(name as any, input as any, { timeoutMs }) as Promise<T>
+let documentSync: { path: string; version(): number; recover(): Promise<void> } | null = null
+let activity: EditorActivity | null = null
+async function req<T>(name: string, input: unknown, timeoutMs = 20000, signal?: AbortSignal): Promise<T> {
+  if (DOCUMENT_READ_METHODS.has(name) && activity && !activity.visible) return null as T
+  const clean = JSON.parse(JSON.stringify(input ?? null))
+  const deadline = Date.now() + timeoutMs
+  let recovered = false
+  for (;;) {
+    if (DOCUMENT_READ_METHODS.has(name) && activity && !activity.visible) return null as T
+    if (signal?.aborted) throw Object.assign(new Error('Request cancelled'), { name: 'AbortError' })
+    try {
+      const sync = documentSync && clean?.path === documentSync.path && DOCUMENT_READ_METHODS.has(name) ? documentSync : null
+      if (sync) clean.version = sync.version()
+      const result = await orca.plugin.request(name as any, clean, { timeoutMs: Math.max(1, deadline - Date.now()), signal }) as T
+      if (sync && (result as { resync?: boolean } | null)?.resync) {
+        if (recovered) throw new Error('The language server lost the document again. Retry navigation.')
+        recovered = true
+        await sync.recover()
+        continue
+      }
+      return result
+    } catch (error) {
+      const e = error as { code?: string; retryAfterMs?: number }
+      const delay = Math.max(50, Number(e.retryAfterMs) || 500)
+      if (signal?.aborted || e.code !== 'rate_limited' || Date.now() + delay >= deadline) throw error
+      // All open plugin frames share Orca's 120 requests / 10 s budget. A short
+      // burst (or chunked upload) should wait for admission, not lose navigation.
+      await new Promise<void>((done) => {
+        const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); done() }
+        const timer = setTimeout(finish, delay)
+        signal?.addEventListener('abort', finish, { once: true })
+      })
+    }
+  }
+}
 
 // Show request errors in the status bar instead of swallowing them silently
 const reportError = (e: unknown) => { setStatus('LSP error: ' + (e instanceof Error ? e.message : String(e)).slice(0, 200), 'err'); return null }
@@ -114,11 +154,16 @@ function applyTheme() {
 }
 
 async function main() {
+  await loadLanguageFallbacks()
   // TextMate grammar + Dark+/Light+ theme (as in VS Code); on failure keep Monaco's built-in tokenizer.
-  const textMate = installTextMate(LANG)
+  if (!orca.document) throw new Error('Open a Python, QML or C++ file in this editor.')
   const session = await orca.document.session<string>({ debounceMs: 300 })
-  await textMate
+  // Retain the disk-identifying snapshot before deferred startup lets edits arrive.
+  const attachmentText = session.value
   const container = document.getElementById('editor')!
+  activity = new EditorActivity(container)
+  trackTextMateActivity(activity)
+  window.addEventListener('beforeunload', () => activity?.dispose())
   // Unique URI per load: avoids clashing on 'inmemory://model/1' when the frame reloads.
   const mainUri = monaco.Uri.from({ scheme: 'orca-doc', path: '/' + Date.now() + '-' + Math.random().toString(36).slice(2) + ({ python: '.py', qml: '.qml', cpp: '.cpp' } as const)[LANG] })
   const model = monaco.editor.getModel(mainUri) ?? monaco.editor.createModel(session.value, MONACO_LANG, mainUri)
@@ -214,12 +259,15 @@ async function main() {
     }
     pickerFilter.focus()
   }
+  setStatus('Waiting for active tab…', 'busy')
+  await activity.whenVisible()
+  await installTextMate(LANG)
   void req<HostChoice>('lsp.hostChoice', null, 15000).then((c) => showHost(c.chosen && c.chosen !== 'local' ? c.chosen : null, !c.chosen)).catch(() => showHost(null, true))
 
   // --- connect to the worker ---
   setStatus('Looking for the file in the workspace…', 'busy')
-  // Send a hash instead of the whole file: the plugin channel is limited to ~1 MiB per message (a 19 MB resources_rc.py fails with "message too large").
-  const lfText = model.getValue().replace(/\r\n/g, '\n')
+  // Frame requests are limited to 64 KiB. Attach by hash, never by sending the file.
+  const lfText = attachmentText.replace(/\r\n/g, '\n')
   const lfBytes = new TextEncoder().encode(lfText).length
   const lineBreaks = (lfText.match(/\n/g) ?? []).length
   const att = await req<AttachOutput>('lsp.attach', { language: LANG, hash: await sha1Lf(lfText), size: lfBytes, sizeCrlf: lfBytes + lineBreaks }, 90000).catch((e) => ({ ok: false, path: null, candidates: 0, workspace: null, server: null, message: String(e) }) as AttachOutput)
@@ -234,17 +282,24 @@ async function main() {
 
   let version = 1
   // Small file: send the content; large file: the worker reads it from disk (on open, editor content = disk content).
-  const SMALL = 400_000
   const openText = model.getValue()
-  await req('lsp.open', openText.length <= SMALL ? { path, text: openText, version } : { path, version })
+  const openFromDisk = messageBytes({ path, text: openText, version }) > REQUEST_BUDGET
+  await req('lsp.open', openFromDisk ? { path, version } : { path, text: openText, version })
   /** Resend the whole content in chunks (when the worker's copy is out of sync). */
   const resyncFull = async () => {
     const t = model.getValue()
+    // The full snapshot already includes these events. Consume them so a failed
+    // incremental request followed by resync cannot apply new keystrokes twice.
+    pendingEvents = []
+    pendingBytes = 0
     const v = ++version
-    if (t.length <= SMALL) { await req('lsp.change', { path, text: t, version: v }); return }
-    const CH = 300_000
-    const total = Math.ceil(t.length / CH)
-    for (let i = 0; i < total; i++) await req('lsp.upload', { path, version: v, part: t.slice(i * CH, (i + 1) * CH), index: i, total }, 60000)
+    if (messageBytes({ path, text: t, version: v }) <= REQUEST_BUDGET) { await req('lsp.change', { path, text: t, version: v }); return }
+    const overhead = messageBytes({ path, version: v, part: '', index: t.length, total: t.length })
+    const chunks = chunkText(t, Math.min(36_000, REQUEST_BUDGET - overhead))
+    for (let i = 0; i < chunks.length; i++) {
+      const r = await req<{ ok: boolean }>('lsp.upload', { path, version: v, part: chunks[i], index: i, total: chunks.length }, 60000)
+      if (!r.ok) throw new Error('Document upload failed. Restart the language server to retry.')
+    }
   }
 
   const semEmitter = new monaco.Emitter<void>()
@@ -326,7 +381,8 @@ async function main() {
     setStatus(`Restarting ${SERVER}…`, 'busy')
     const r = await req<{ detail: string }>('lsp.restart', { path }, 90000).catch(reportError)
     if (!r) return
-    await resyncFull()
+    sending = sending.then(resyncFull, resyncFull)
+    await sending
     setStatus(`${SERVER} • ${rel} • ${r.detail}`, 'ok')
     if (LANG !== 'python') { interpBtn.textContent = `⚙ ${SERVER}`; interpBtn.title = `${r.detail}\nClick to restart ${SERVER} (after a CMake configure)` }
     semEmitter.fire()
@@ -347,43 +403,79 @@ async function main() {
   type Edit = { offset: number; length: number; text: string }
   let pendingEvents: Edit[][] = []
   let pendingBytes = 0
+  let fullSyncNeeded = false
   let sending: Promise<void> = Promise.resolve()
   let changeTimer: ReturnType<typeof setTimeout> | undefined
   model.onDidChangeContent((ev) => {
+    if (!activity?.visible) { fullSyncNeeded = true; pendingEvents = []; pendingBytes = 0; return }
     const edits = ev.changes.map((c) => ({ offset: c.rangeOffset, length: c.rangeLength, text: c.text }))
     pendingEvents.push(edits)
-    pendingBytes += edits.reduce((n, e) => n + e.text.length, 0)
+    pendingBytes += messageBytes({ path, edits, version: version + 1 })
     clearTimeout(changeTimer)
-    changeTimer = setTimeout(() => { void flushChange() }, 200)
+    changeTimer = setTimeout(() => { void flushChange().catch(reportError) }, 200)
   })
   const sendPending = async () => {
+    if (!activity?.visible) return
     const events = pendingEvents
-    const big = pendingBytes > 400_000
+    const big = fullSyncNeeded || pendingBytes > REQUEST_BUDGET
+    fullSyncNeeded = false
     pendingEvents = []
     pendingBytes = 0
-    if (!events.length) return
     // Large paste/replace (e.g. file reload): resend the whole file in chunks
     if (big) { await resyncFull(); return }
+    if (!events.length) return
     for (const edits of events) {
       const r = await req<{ ok: boolean; resync?: boolean }>('lsp.change', { path, edits, version: ++version, expectLength: undefined }).catch(() => ({ ok: false, resync: true }))
       if (!r.ok) { await resyncFull(); return }
     }
   }
   const flushChange = async () => {
+    if (!activity?.visible) return
     if (changeTimer) { clearTimeout(changeTimer); changeTimer = undefined }
     sending = sending.then(sendPending, sendPending)
     await sending
   }
+  // A user may type while attach/open is pending, before the change listener is
+  // installed. Reading a large file from disk must not discard that unsaved text.
+  if (model.getValue() !== openText || (openFromDisk && openText.replace(/\r\n/g, '\n') !== lfText)) {
+    sending = sending.then(resyncFull, resyncFull)
+    await sending
+  }
+  let recovery: Promise<void> | null = null
+  documentSync = { path, version: () => version, recover: () => {
+    if (recovery) return recovery
+    sending = sending.then(resyncFull, resyncFull)
+    recovery = sending.finally(() => { recovery = null })
+    return recovery
+  } }
   window.addEventListener('beforeunload', () => { void req('lsp.close', { path }) })
 
   // Only serve this editor's model (library peek models have their own URIs).
   const isMine = (m: monaco.editor.ITextModel) => m === model
+  let interactiveSequence = 0
+  const interactivePrefix = Math.random().toString(36).slice(2)
+  async function queryAt<T>(name: string, position: monaco.Position, token: monaco.CancellationToken, extra: object = {}): Promise<T | null> {
+    if (!activity?.visible || token.isCancellationRequested) return null
+    const revision = model.getVersionId()
+    await flushChange()
+    if (token.isCancellationRequested || revision !== model.getVersionId()) return null
+    const requestId = `${interactivePrefix}-${++interactiveSequence}`
+    const controller = new AbortController()
+    const cancel = token.onCancellationRequested(() => {
+      controller.abort()
+      void req('lsp.cancel', { path, requestId }, 2000).catch(() => {})
+    })
+    try {
+      const result = await req<T>(name, { path, position: toPos(position), requestId, ...extra }, 20000, controller.signal)
+      return !activity?.visible || token.isCancellationRequested || revision !== model.getVersionId() ? null : result
+    } catch (e) { if (!token.isCancellationRequested) reportError(e); return null }
+    finally { cancel.dispose() }
+  }
 
   monaco.languages.registerHoverProvider(MONACO_LANG, {
-    async provideHover(m, position) {
+    async provideHover(m, position, token) {
       if (!isMine(m)) return null
-      await flushChange()
-      const h = await req<HoverOutput>('lsp.hover', { path, position: toPos(position) }).catch(reportError)
+      const h = await queryAt<HoverOutput>('lsp.hover', position, token)
       if (!h?.markdown) return null
       return { contents: [{ value: h.markdown }], range: h.range ? toRange(h.range) : undefined }
     }
@@ -391,56 +483,192 @@ async function main() {
 
   // Definitions:
   //  - same file: Monaco jumps within the editor;
-  //  - another file in the workspace: open an Orca tab for it (Orca cannot select a line yet, so the line is shown in the status bar);
+  //  - another file in the workspace: open an Orca tab at the target line through the CLI;
   //  - libraries (site-packages, typeshed): open a read-only model and show a peek inside this editor.
-  monaco.languages.registerDefinitionProvider(MONACO_LANG, {
-    async provideDefinition(m, position) {
-      if (!isMine(m)) return null
-      await flushChange()
-      const d = await req<DefinitionOutput>('lsp.definition', { path, position: toPos(position) }).catch(reportError)
-      if (!d?.locations.length) return null
+  const navigationTargets = new Map<string, Loc>()
+  const peekModels = new Set<monaco.editor.ITextModel>()
+  const previewUses = new Map<string, { pins: number; used: number }>()
+  let previewClock = 0
+  const prunePreviews = (protectedUris = new Set<string>()) => {
+    const models = [...peekModels].filter((m) => !m.isDisposed())
+    let bytes = models.reduce((sum, m) => sum + m.getValueLength() * 2, 0), count = models.length
+    models.sort((a, b) => (previewUses.get(a.uri.toString())?.used ?? 0) - (previewUses.get(b.uri.toString())?.used ?? 0))
+    for (const m of models) {
+      if (count <= 6 && bytes <= 4 * 1024 * 1024) break
+      const key = m.uri.toString()
+      if (protectedUris.has(key) || (previewUses.get(key)?.pins ?? 0) > 0) continue
+      bytes -= m.getValueLength() * 2; count--
+      peekModels.delete(m); previewUses.delete(key); m.dispose()
+    }
+  }
+  const loadPreview = async (loc: Loc, requestedUri?: monaco.Uri) => {
+    const r = await req<{ text?: string; window?: [number, number] }>('lsp.peek', { path: loc.path, line: loc.range.start.line }).catch(() => null)
+    // The actual returned window identifies reusable text. Per-line URIs retained
+    // a fresh copy of the same large file for every Ctrl-hover/definition.
+    const uri = requestedUri ?? monaco.Uri.from({ scheme: (loc.openable ?? loc.inWorkspace) ? 'orca-ws' : 'orca-lib',
+      path: '/' + loc.path.replace(/\\/g, '/'), query: r?.window ? `window=${r.window[0]}-${r.window[1]}` : 'full' })
+    const peekLang = /\.pyi?$/i.test(loc.path) ? 'python' : /\.qml$/i.test(loc.path) ? 'qml' : 'cpp'
+    let target = monaco.editor.getModel(uri)
+    if (!target) {
+      target = monaco.editor.createModel(r?.text ?? '', peekLang, uri)
+      peekModels.add(target)
+      if (peekLang !== LANG) void installTextMate(peekLang as Lang)
+    } else if (target.getValue() !== (r?.text ?? '')) target.setValue(r?.text ?? '')
+    const use = previewUses.get(uri.toString()) ?? { pins: 0, used: 0 }
+    use.used = ++previewClock; previewUses.set(uri.toString(), use)
+    navigationTargets.set(uri.toString(), loc)
+    return { uri, from: r?.window?.[0] ?? 0, to: r?.window?.[1] ?? Number.MAX_SAFE_INTEGER }
+  }
+  // Monaco's standalone resolver uses immortal references. Track consumers here
+  // so an open peek stays alive while unused preview models can be evicted.
+  const resolver = StandaloneServices.get(ITextModelService)
+  const originalReference = resolver.createModelReference.bind(resolver)
+  resolver.createModelReference = async (uri: monaco.Uri) => {
+    const key = uri.toString(), loc = navigationTargets.get(key)
+    if (!loc) return originalReference(uri)
+    // Pin before either await: releasing another preview while this acquisition
+    // is suspended must not evict the model that the reference is about to use.
+    const use = previewUses.get(key) ?? { pins: 0, used: 0 }
+    previewUses.set(key, use); use.pins++; use.used = ++previewClock
+    try {
+      if (!monaco.editor.getModel(uri)) await loadPreview(loc, uri)
+      const ref = await originalReference(uri)
+      let disposed = false
+      return { object: ref.object, dispose: () => {
+        if (disposed) return
+        disposed = true; ref.dispose(); use.pins--
+        prunePreviews()
+      } }
+    } catch (e) { use.pins--; prunePreviews(); throw e }
+  }
+  const resolveLocations = async (locations: Loc[]): Promise<monaco.languages.Location[]> => {
+      // Reuse only actual window coverage within this request. Other tabs can
+      // change targets, and 2000 long lines may need more than one byte-limited peek.
+      const windows: { path: string; from: number; to: number; uri: monaco.Uri }[] = []
       const out: monaco.languages.Location[] = []
-      for (const loc of d.locations) {
+      for (const loc of locations) {
         if (sameFile(loc.path, path)) { out.push({ uri: model.uri, range: toRange(loc.range) }); continue }
         // Monaco needs a real model for every target (even when we open an Orca tab ourselves), otherwise "Model not found".
         // Openable as an Orca tab (file in the workspace, including the project's venv/site-packages) -> orca-ws; otherwise peek
-        const toTab = loc.openable ?? loc.inWorkspace
-        const scheme = toTab ? 'orca-ws' : 'orca-lib'
-        // Large files only send a window of lines: one model per ~2000-line region (query w=) so jumps elsewhere still have content
-        const uri = monaco.Uri.from({ scheme, path: '/' + loc.path.replace(/\\/g, '/'), query: `w=${Math.floor(loc.range.start.line / 2000)}` })
-        let target = monaco.editor.getModel(uri)
-        if (!target) {
-          const r = await req<{ text?: string }>('lsp.peek', { path: loc.path, line: loc.range.start.line }).catch(() => null)
-          const peekLang = /\.pyi?$/i.test(loc.path) ? 'python' : /\.qml$/i.test(loc.path) ? 'qml' : 'cpp'
-          target = monaco.editor.getModel(uri) ?? monaco.editor.createModel(r?.text ?? '', peekLang, uri)
-          if (peekLang !== LANG) void installTextMate(peekLang as Lang)
-        }
-        if (toTab) pendingReveal = loc
+        const covered = windows.find((w) => sameFile(w.path, loc.path) && loc.range.start.line >= w.from && loc.range.start.line <= w.to)
+        if (covered) { out.push({ uri: covered.uri, range: toRange(loc.range) }); continue }
+        const loaded = await loadPreview(loc)
+        const { uri } = loaded
+        windows.push({ path: loc.path, ...loaded })
         out.push({ uri, range: toRange(loc.range) })
       }
+      prunePreviews(new Set(out.map((loc) => loc.uri.toString())))
       return out
+  }
+  monaco.languages.registerDefinitionProvider(MONACO_LANG, {
+    async provideDefinition(m, position, token) {
+      if (!isMine(m)) return null
+      const d = await queryAt<DefinitionOutput>('lsp.definition', position, token)
+      return d?.locations.length ? resolveLocations(d.locations) : null
     }
   })
-  let pendingReveal: { path: string; range: { start: Pos } } | null = null
+  // Record Ctrl/Cmd at press time. Monaco's native link action checks the
+  // modifier again at mouse-up and can silently drop a click after key release.
+  // Explicit clicks also skip preview materialization before opening a tab.
+  let pressedLink: { position: monaco.Position; revision: number; x: number; y: number } | null = null
+  let clickRequest: monaco.CancellationTokenSource | null = null
+  const clickedPosition = (event: MouseEvent) => {
+    const target = editor.getTargetAtClientPoint(event.clientX, event.clientY)
+    return target?.type === monaco.editor.MouseTargetType.CONTENT_TEXT && target.position && model.getWordAtPosition(target.position) ? target.position : null
+  }
+  const navigateClick = async (position: monaco.Position) => {
+    clickRequest?.cancel(); clickRequest?.dispose()
+    const cancellation = clickRequest = new monaco.CancellationTokenSource()
+    editor.focus(); editor.setPosition(position)
+    setStatus(`Looking up definition at line ${position.lineNumber}…`, 'busy')
+    const d = await queryAt<DefinitionOutput>('lsp.definition', position, cancellation.token, { intent: 'click' })
+    if (cancellation.token.isCancellationRequested) return
+    if (!d?.locations.length) { if (d) setStatus('No definition found at this symbol.', 'warn'); return }
+    const loc = d.locations[0]
+    // Match VS Code's alternative-definition action when the only result is
+    // the declaration under the pointer. Reuse its references UI/providers.
+    if (d.locations.length === 1 && sameFile(loc.path, path) && toRange(loc.range).containsPosition(position)) {
+      if (!editor.getPosition()?.equals(position)) return
+      setStatus(`Finding usages of ${model.getWordAtPosition(position)?.word ?? 'this symbol'}…`, 'busy')
+      await StandaloneServices.get(ICommandService).executeCommand('editor.action.referenceSearch.trigger')
+      if (!cancellation.token.isCancellationRequested) setStatus(`${SERVER} • ${rel}`, 'ok')
+      return
+    }
+    if (sameFile(loc.path, path)) {
+      editor.setPosition(new monaco.Position(loc.range.start.line + 1, loc.range.start.character + 1))
+      editor.revealRangeInCenter(toRange(loc.range))
+      setStatus(`${SERVER} • ${rel} • definition at line ${loc.range.start.line + 1}`, 'ok'); return
+    }
+    if (loc.openable ?? loc.inWorkspace) {
+      const r = await req<{ opened: boolean; rel?: string }>('lsp.reveal', { path: loc.path, line: loc.range.start.line + 1 }).catch(reportError)
+      if (r?.opened) { setStatus(`Opened ${r.rel ?? shortName(loc.path)}, line ${loc.range.start.line + 1}`, 'ok'); return }
+    }
+    const locations = await resolveLocations(d.locations)
+    if (!cancellation.token.isCancellationRequested) await StandaloneServices.get(ICommandService).executeCommand('editor.action.peekLocations', model.uri, position, locations)
+  }
+  const linkDown = (event: MouseEvent) => {
+    pressedLink = null
+    if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.detail > 1) return
+    const position = clickedPosition(event)
+    if (!position) return
+    pressedLink = { position, revision: model.getVersionId(), x: event.clientX, y: event.clientY }
+    event.preventDefault(); event.stopImmediatePropagation()
+  }
+  const linkUp = (event: MouseEvent) => {
+    const pressed = pressedLink
+    if (!pressed || event.button !== 0) return
+    pressedLink = null
+    event.preventDefault(); event.stopImmediatePropagation()
+    if (pressed.revision !== model.getVersionId() || Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) > 5) return
+    void navigateClick(pressed.position).catch(reportError)
+  }
+  container.addEventListener('mousedown', linkDown, true)
+  container.addEventListener('mouseup', linkUp, true)
+  const resetLinkPress = () => { pressedLink = null }
+  window.addEventListener('mouseup', resetLinkPress)
+  window.addEventListener('blur', resetLinkPress)
+  window.addEventListener('pointercancel', resetLinkPress)
+  const cancelClickOnEdit = model.onDidChangeContent(() => { pressedLink = null; clickRequest?.cancel() })
+  window.addEventListener('beforeunload', () => {
+    container.removeEventListener('mousedown', linkDown, true); container.removeEventListener('mouseup', linkUp, true)
+    window.removeEventListener('mouseup', resetLinkPress); window.removeEventListener('blur', resetLinkPress)
+    window.removeEventListener('pointercancel', resetLinkPress)
+    clickRequest?.cancel(); clickRequest?.dispose()
+    cancelClickOnEdit.dispose()
+  })
+  const ideProviders = registerIdeProviders({ language: MONACO_LANG, path, model, readOnly: session.readOnly,
+    request: req, flush: flushChange, version: () => version, locations: resolveLocations, report: reportError, status: (message) => setStatus(message, 'warn') })
+  window.addEventListener('beforeunload', () => { ideProviders.dispose(); for (const m of peekModels) m.dispose() })
 
   // The standalone editor cannot open other models: intercept to open an Orca tab (workspace) or a peek (library).
   const editorService = (editor as any)._codeEditorService
+  // Monaco's peek uses an embedded editor and otherwise inherits editable options.
+  // Its models are previews, not Orca document sessions: prevent edits being lost.
+  const previewListener = editorService?.onCodeEditorAdd?.((preview: monaco.editor.ICodeEditor) => {
+    // The event fires during the base constructor; embedded options are assigned
+    // afterwards, so apply after construction rather than being overwritten.
+    if (preview !== editor) queueMicrotask(() => {
+      if (editorService.listCodeEditors().includes(preview)) preview.updateOptions({ readOnly: true, domReadOnly: true })
+    })
+  })
+  window.addEventListener('beforeunload', () => previewListener?.dispose())
   if (editorService?.openCodeEditor) {
     const original = editorService.openCodeEditor.bind(editorService)
     editorService.openCodeEditor = async (input: any, source: any, sideBySide: any) => {
       const target = input.resource as monaco.Uri
       if (target.toString() === model.uri.toString()) return original(input, source, sideBySide)
-      if (target.scheme === 'orca-ws' && pendingReveal) {
-        const loc = pendingReveal
-        pendingReveal = null
-        const r = await req<{ opened: boolean; rel?: string }>('lsp.reveal', { path: loc.path, line: loc.range.start.line + 1 }).catch(reportError)
-        if (r?.opened) { setStatus(`Opened ${r.rel}, line ${loc.range.start.line + 1}`, 'ok'); return null }
-        // Could not open a tab (e.g. older Orca, outside the workspace): peek in place
-        editor.trigger('lsp', 'editor.action.peekDefinition', null)
-        return null
-      }
-      if (target.scheme === 'orca-lib') {
-        editor.trigger('lsp', 'editor.action.peekDefinition', null)
+      if (target.scheme === 'orca-ws' || target.scheme === 'orca-lib') {
+        const loc = navigationTargets.get(target.toString())
+        if (!loc) return null
+        const line = input.options?.selection?.startLineNumber ?? loc.range.start.line + 1
+        if (target.scheme === 'orca-ws') {
+          const r = await req<{ opened: boolean; rel?: string }>('lsp.reveal', { path: loc.path, line }).catch(reportError)
+          if (r?.opened) { setStatus(`Opened ${r.rel}, line ${line}`, 'ok'); return null }
+        }
+        // Keep peek read-only rather than replacing the document's editable model.
+        const selection = input.options?.selection
+        const at = selection ? new monaco.Position(selection.startLineNumber, selection.startColumn) : new monaco.Position(line, loc.range.start.character + 1)
+        await StandaloneServices.get(ICommandService).executeCommand('editor.action.peekLocations', model.uri, editor.getPosition(), [{ uri: target, range: monaco.Range.fromPositions(at) }])
         return null
       }
       return null
@@ -484,7 +712,12 @@ async function main() {
   })
   // The legend can gain new tokens at runtime: tell Monaco to refetch after the first pass.
   setTimeout(() => semEmitter.fire(), 1500)
-  orca.plugin.on('lsp.diagnostics' as any, () => semEmitter.fire())
+  let semanticRefreshTimer: ReturnType<typeof setTimeout> | undefined
+  orca.plugin.on('lsp.diagnostics' as any, (p: any) => {
+    if (!activity?.visible || !sameFile(p.path, path)) return
+    clearTimeout(semanticRefreshTimer)
+    semanticRefreshTimer = setTimeout(() => semEmitter.fire(), 150)
+  })
 
   monaco.languages.registerCompletionItemProvider(MONACO_LANG, {
     triggerCharacters: LANG === 'cpp' ? ['.', '>', ':', '"', '<', '/'] : LANG === 'qml' ? ['.', ':'] : ['.', '(', ',', ' '],
@@ -506,29 +739,57 @@ async function main() {
           insertText: it.insertText ?? it.label,
           sortText: it.sortText,
           filterText: it.filterText,
-          range: rangeOf(it.range)
+          range: rangeOf(it.range),
+          insertTextRules: it.snippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+          additionalTextEdits: it.additionalTextEdits?.map((e) => ({ range: toRange(e.range), text: e.text }))
         }))
       }
     }
   })
 
+  let lastDiagnostics: DiagnosticsOutput = { version: -1, items: [] }
+  let diagnosticsEnabled = LANG !== 'python' || await orca.settings.get('pythonDiagnostics').catch(() => true) !== false
+  const refreshDiagnosticsSetting = async () => {
+    diagnosticsEnabled = await orca.settings.get('pythonDiagnostics').catch(() => true) !== false
+    applyDiagnostics(lastDiagnostics)
+  }
+  if (LANG === 'python') {
+    editor.addAction({
+      id: 'qt-lsp.toggleDiagnostics', label: 'Python: Toggle Diagnostics',
+      run: async () => {
+        try {
+          await orca.settings.set('pythonDiagnostics', !diagnosticsEnabled)
+          await refreshDiagnosticsSetting()
+        } catch (e) { reportError(e) }
+      }
+    })
+    const listener = orca.settings.onDidChange(({ key }) => { if (key === 'pythonDiagnostics') void refreshDiagnosticsSetting() })
+    window.addEventListener('beforeunload', () => listener.dispose())
+  }
   orca.plugin.on('lsp.diagnostics' as any, (p: any) => {
     if (!sameFile(p.path, path)) return
     applyDiagnostics(p as DiagnosticsOutput)
   })
   function applyDiagnostics(d: DiagnosticsOutput) {
-    monaco.editor.setModelMarkers(model, SERVER, d.items.map((x) => ({
+    lastDiagnostics = d
+    if (!activity?.visible) return
+    const items = diagnosticsEnabled ? d.items : []
+    monaco.editor.setModelMarkers(model, SERVER, items.map((x) => ({
       ...toRangeObj(x.range),
       severity: x.severity === 1 ? monaco.MarkerSeverity.Error : x.severity === 2 ? monaco.MarkerSeverity.Warning : x.severity === 3 ? monaco.MarkerSeverity.Info : monaco.MarkerSeverity.Hint,
       message: x.message,
       source: x.source ?? SERVER,
       code: x.code !== undefined ? String(x.code) : undefined
     })))
-    const errs = d.items.filter((x) => x.severity === 1).length
-    const warns = d.items.filter((x) => x.severity === 2).length
-    if (statusEl.dataset.tone !== 'err') setStatus(`${SERVER} • ${rel} • ${errs} errors, ${warns} warnings`, errs ? 'warn' : 'ok')
+    const errs = items.filter((x) => x.severity === 1).length
+    const warns = items.filter((x) => x.severity === 2).length
+    if (statusEl.dataset.tone !== 'err') setStatus(`${SERVER} • ${rel} • ${diagnosticsEnabled ? `${errs} errors, ${warns} warnings` : 'diagnostics off'}`, errs ? 'warn' : 'ok')
   }
   void req<DiagnosticsOutput>('lsp.diagnostics', { path }).then(applyDiagnostics).catch(() => {})
+  activity.onChange((visible) => {
+    if (!visible) { clearTimeout(semanticRefreshTimer); clickRequest?.cancel(); return }
+    void flushChange().then(() => { applyDiagnostics(lastDiagnostics); semEmitter.fire() }).catch(reportError)
+  })
   editor.focus()
 }
 

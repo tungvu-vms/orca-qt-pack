@@ -6,7 +6,7 @@
   "execution": "data",
   "description": "Highlighting for Qt project files: Qt Style Sheets, resources, Designer forms, Linguist translations, qmake, CMake modules, PySide6 deploy specs and pip requirements.",
   "license": "LGPL-3.0-only AND MIT",
-  "author": { "name": "GPS Tech Vietnam" },
+  "author": { "name": "Tùng Vũ" },
   "engines": { "orca": ">=1.4.246" },
   "contributes": {
     "syntaxes": [

@@ -17,7 +17,7 @@
 //   7. Installed (global) Python: the highest version that runs (not PATH or py launcher order);
 //      Microsoft Store stubs (WindowsApps) are skipped.
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 export type InterpreterSource = 'saved' | 'setting' | 'vscode' | 'pyright' | 'venv' | 'env' | 'global'
@@ -184,6 +184,12 @@ export function discoverInterpreters(file: string, root: string, opts: { saved?:
   const project = projectRootFor(file, root)
   const list: Interpreter[] = []
   const seen = new Set<string>()
+  const insideRoot = (p: string) => {
+    const r = lower(resolve(root)), abs = lower(resolve(p))
+    if (abs === r || abs.startsWith(r + sep)) return true
+    // Resolve aliases into the workspace, but preserve lexical checks for venv symlinks out of it.
+    try { const realRoot = lower(realpathSync(root)), real = lower(realpathSync(p)); return real === realRoot || real.startsWith(realRoot + sep) } catch { return false }
+  }
   const make = (path: string, source: InterpreterSource, reason: string): Interpreter | null => {
     const key = lower(resolve(path))
     if (seen.has(key) || !existsSync(path)) return null
@@ -191,9 +197,10 @@ export function discoverInterpreters(file: string, root: string, opts: { saved?:
     const envDir = dirname(dirname(path))
     const isVenv = isEnvDir(envDir) || isEnvDir(dirname(path))
     const dir = isEnvDir(envDir) ? envDir : isEnvDir(dirname(path)) ? dirname(path) : null
+    if (!useProject && (dir || insideRoot(path))) return null
     // Never execute a file from the project just to read its version (a cloned repo could ship any "python");
     // project environments get their version from pyvenv.cfg only. Installed Pythons outside the project may run.
-    const inProject = lower(resolve(path)).startsWith(lower(resolve(root)) + sep)
+    const inProject = insideRoot(path)
     const version = (dir && venvVersion(dir)) || (inProject ? null : runVersion(path))
     const name = dir ? (lower(dir).startsWith(lower(project) + (WIN ? '\\' : '/')) ? dir.slice(project.length + 1).replace(/\\/g, '/') : basename(dir)) : `Python ${version ?? ''}`.trim()
     return { path: resolve(path), label: isVenv ? `${name}${version ? ` (${version})` : ''}` : `${name} (global)`, version, source, envDir: dir, reason }
@@ -230,6 +237,7 @@ export function discoverInterpreters(file: string, root: string, opts: { saved?:
   if (useProject && active && lower(resolve(active)).startsWith(lower(project))) add(envExe(active), 'env', 'active VIRTUAL_ENV')
 
   const globals = globalCandidates()
+    .filter((p) => !insideRoot(p) && !envDirOf(p))
     .map((p) => ({ p, v: runVersion(p) }))
     .filter((x) => x.v)
     .sort((a, b) => cmpVersionDesc(a.v, b.v))

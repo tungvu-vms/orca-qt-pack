@@ -3,12 +3,13 @@
 //   via `ssh host node -` + stdin, so it does not depend on the remote shell (sh, zsh, PowerShell, cmd).
 // - Requires: key-based SSH login (BatchMode, no password prompt) and Node >= 18 on the remote host.
 import { spawn, type ChildProcess } from 'node:child_process'
+import { LANGUAGE_PROFILE, PLUGIN_ID } from './language-profile'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { PROBE_SCRIPT, type ProbeQuery } from './probe-script'
 
-export interface RemoteInfo { version: string; platform: string; node: string; home: string }
+export interface RemoteInfo { version: string; platform: string; node: string; home: string; language?: string; pluginId?: string }
 
 /** Ways to invoke node on the remote host: the SSH session PATH, common install locations, then a login shell (nvm, fnm, asdf...). */
 const NODE_CANDIDATES: ((args: string) => string[])[] = [
@@ -74,6 +75,7 @@ export class RemoteAgent {
   }
 
   private nodeKnown = false
+  private get agentFile() { return LANGUAGE_PROFILE === 'all' ? `agent-${this.version}.mjs` : `agent-${PLUGIN_ID}-${this.version}.mjs` }
   private nodeCandidates() {
     if (this.nodeKnown) return [this.node]
     const custom = String(this.settings.remoteNode ?? '').trim()
@@ -101,9 +103,11 @@ export class RemoteAgent {
     const b64 = Buffer.from(this.agentSource).toString('base64')
     const script = `const fs=require('fs'),path=require('path'),os=require('os');` +
       `const d=path.join(os.homedir(),'.orca-qt-lsp');fs.mkdirSync(d,{recursive:true});` +
-      `const f=path.join(d,'agent-${this.version}.mjs');` +
-      `if(!fs.existsSync(f)){fs.writeFileSync(f+'.tmp',Buffer.from('${b64}','base64'));fs.renameSync(f+'.tmp',f)}` +
-      `for(const n of fs.readdirSync(d))if(/^agent-[0-9a-f]+\\.mjs$/.test(n)&&n!=='agent-${this.version}.mjs')try{fs.unlinkSync(path.join(d,n))}catch{}` +
+      `const f=path.join(d,${JSON.stringify(this.agentFile)});` +
+      `if(!fs.existsSync(f)){const t=f+'.'+process.pid+'.'+require('crypto').randomBytes(6).toString('hex')+'.tmp';` +
+      `try{fs.writeFileSync(t,Buffer.from('${b64}','base64'));fs.renameSync(t,f)}catch(e){if(!fs.existsSync(f))throw e}finally{try{fs.unlinkSync(t)}catch{}}}` +
+      // Content-addressed files can be about to launch in another worker. Do not
+      // prune any executable here; only this install's unique temporary file.
       `console.log('QTLSP-OK '+process.version+' '+process.platform)\n`
     const tried: string[] = []
     for (const node of this.nodeCandidates()) {
@@ -125,7 +129,7 @@ export class RemoteAgent {
     if (this.starting) return this.starting
     this.starting = (async () => {
       await this.install()
-      const p = spawn(this.ssh, this.sshArgs(this.node(`.orca-qt-lsp/agent-${this.version}.mjs`)), { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      const p = spawn(this.ssh, this.sshArgs(this.node(`.orca-qt-lsp/${this.agentFile}`)), { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
       this.proc = p
       let errTail = ''
       p.stderr!.on('data', (d) => { errTail = (errTail + d).slice(-2000) })
@@ -149,7 +153,10 @@ export class RemoteAgent {
         clearTimeout(x.timer)
         if ('e' in m) x.reject(new Error(m.e)); else x.resolve(m.r)
       })
-      const info = await this.call<RemoteInfo>('$hello', { settings: this.settings }, 30000)
+      const info = await this.call<RemoteInfo>('$hello', { settings: this.settings, language: LANGUAGE_PROFILE, pluginId: PLUGIN_ID }, 30000)
+      if (LANGUAGE_PROFILE !== 'all' && (info.language !== LANGUAGE_PROFILE || info.pluginId !== PLUGIN_ID)) {
+        this.stop(); throw new Error('Remote agent language/profile identity mismatch')
+      }
       this.info = info
       return info
     })().finally(() => { this.starting = null })

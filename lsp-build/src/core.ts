@@ -8,12 +8,17 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { LspClient } from './lsp-client'
-import { installPyright } from './pyright-install'
+import { serverCommand } from './language-adapters'
+declare const __LSP_LANGUAGE__: Lang | 'all'
 import { discoverInterpreters, type Interpreter } from './interpreters'
-import { EXTS_OF_LANG, LANGUAGE_ID, SERVER_LABEL, findBuildDirs, findClangd, findQmlls, projectRootFor, type Lang } from './servers'
+import { EXTS_OF_LANG, LANGUAGE_ID, SERVER_LABEL, projectRootFor, type Lang } from './servers'
 import type {
-  AttachInput, AttachOutput, CompletionOutput, DefinitionOutput, DiagnosticsOutput, DocInput, HoverOutput, Loc, PosInput
+  AttachInput, AttachOutput, CompletionOutput, DefinitionOutput, DiagnosticsOutput, DocInput, HoverOutput, Loc, PosInput,
+  ReferencesOutput, SignatureHelpOutput, DocumentSymbolsOutput, DocumentSymbol, DocumentHighlightsOutput, PrepareRenameOutput, RenameOutput, SourceEdit
 } from './protocol'
+import { jsonBytes, messageBytes, limitItems, POST_BUDGET, RESPONSE_BUDGET } from './transport'
+import { DOCUMENT_READ_METHODS } from './protocol'
+import { assertSupportedInput, languageOfPath, LANGUAGE_PROFILE } from './language-profile'
 
 const SKIP = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', 'env', 'dist', '.orca', '.mypy_cache', '.pytest_cache', 'site-packages', '.cache', '.qtc_clangd',
   // workspace is the home folder (e.g. /Users/<name>): skip large system/media folders
@@ -36,13 +41,14 @@ interface Server {
   interpreter: Interpreter | null
   /** Display info (build dir used by clangd/qmlls...) */
   detail: string
+  capabilities: Record<string, any>
 }
 
 
 
 const norm = (p: string) => (WIN ? p.toLowerCase() : p)
 const key = (lang: Lang, root: string) => `${lang}|${norm(root)}`
-const langOfPath = (p: string): Lang | null => (EXTS_OF_LANG.python.test(p) ? 'python' : EXTS_OF_LANG.qml.test(p) ? 'qml' : EXTS_OF_LANG.cpp.test(p) ? 'cpp' : null)
+const langOfPath = languageOfPath
 
 export type Handler = (input: any) => Promise<any>
 export interface CoreEnv {
@@ -66,8 +72,21 @@ export interface Core {
 
 export function createCore(host: CoreEnv): Core {
   const handlers: Record<string, Handler> = {}
-  const handle = (name: string, fn: Handler) => { handlers[name] = fn }
+  // Orca rejects undefined object properties even though JSON.stringify omits them.
+  // Keep the shared RPC boundary identical for in-process tests and the SSH agent.
+  const handle = (name: string, fn: Handler) => { handlers[name] = async (input) => {
+    assertSupportedInput(name, input)
+    if (DOCUMENT_READ_METHODS.has(name) && Number.isInteger(input?.version)) {
+      const lang = langOfPath(input.path)
+      const server = lang ? serverOf(lang, input.path) : null
+      // Orca can reap an idle worker while its editor frame remains open. Do not
+      // answer against disk content at coordinates belonging to an unsaved draft.
+      if (!docs.has(norm(input.path)) || server?.open.get(norm(input.path)) !== input.version) return { resync: true }
+    }
+    return JSON.parse(JSON.stringify((await fn(input)) ?? null))
+  } }
   const servers = new Map<string, Server>()
+  const starting = new Map<string, Promise<Server>>()
   const hashIndex = new Map<string, { at: number; byHash: Map<string, string[]> }>()
 
   async function setting<T>(k: string, fallback: T): Promise<T> {
@@ -99,7 +118,7 @@ export function createCore(host: CoreEnv): Core {
         for (const e of ents) {
           const n = e.name
           if (e.isDirectory()) { if (!skipDir(n)) next.push(join(dir, n)); continue }
-          if (!e.isFile() || !langOfPath(n)) continue
+          if (!e.isFile() || !langOfPath(n) || (LANGUAGE_PROFILE !== 'all' && langOfPath(n) !== LANGUAGE_PROFILE)) continue
           const full = join(dir, n)
           let size: number
           try { size = statSync(full).size } catch { continue }
@@ -139,79 +158,29 @@ export function createCore(host: CoreEnv): Core {
     try { const v = await host.storageGet(SAVED_KEY); return v && typeof v === 'object' ? (v as Record<string, string>) : {} } catch { return {} }
   }
   async function interpretersFor(root: string, file?: string): Promise<Interpreter[]> {
+    if (typeof __LSP_LANGUAGE__ !== 'undefined' && __LSP_LANGUAGE__ !== 'all' && __LSP_LANGUAGE__ !== 'python') return []
     const saved = (await savedInterpreters())[norm(root)]
     const projectEnvs = String(await setting('projectEnvironments', 'on')).trim().toLowerCase() !== 'off'
     return discoverInterpreters(file ?? join(root, '__init__.py'), root, { saved, setting: await setting('python', ''), projectEnvs })
   }
 
-  // ---------- Locate programs ----------
-  function findNode(): string {
-    const exe = WIN ? 'node.exe' : 'node'
-    for (const dir of (process.env.PATH ?? process.env.Path ?? '').split(WIN ? ';' : ':')) if (dir && existsSync(join(dir, exe))) return join(dir, exe)
-    for (const c of WIN ? ['C:\\Program Files\\nodejs\\node.exe'] : ['/usr/local/bin/node', '/opt/homebrew/bin/node', '/usr/bin/node']) if (existsSync(c)) return c
-    return process.execPath
-  }
-  /** Where basedpyright is auto-installed on this machine: %LOCALAPPDATA%orca-qt-lsp (Windows), ~/.local/share/orca-qt-lsp (macOS/Linux). */
-  function pyrightPrefix(): string {
-    const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir()
-    return join(process.env.LOCALAPPDATA ?? (WIN ? join(h, 'AppData', 'Local') : join(h, '.local', 'share')), 'orca-qt-lsp')
-  }
-  function pyrightEntry(): string | null {
-    const h = process.env.USERPROFILE ?? process.env.HOME ?? homedir()
-    const local = process.env.LOCALAPPDATA ?? (WIN ? join(h, 'AppData', 'Local') : join(h, '.local', 'share'))
-    const appData = process.env.APPDATA ?? (WIN ? join(h, 'AppData', 'Roaming') : undefined)
-    const c = [join(pluginDir(), 'server', 'pyright', 'langserver.index.js'), join(local, 'orca-qt-lsp', 'node_modules', 'basedpyright', 'langserver.index.js')]
-    if (appData) c.push(join(appData, 'npm', 'node_modules', 'basedpyright', 'langserver.index.js'), join(appData, 'npm', 'node_modules', 'pyright', 'langserver.index.js'))
-    for (const p of ['/usr/local', '/opt/homebrew', join(h, '.npm-global')]) c.push(join(p, 'lib', 'node_modules', 'basedpyright', 'langserver.index.js'), join(p, 'lib', 'node_modules', 'pyright', 'langserver.index.js'))
-    return c.find((p) => existsSync(p)) ?? null
-  }
-
-  /** Command that runs the server for (lang, root). Throws (shown in the status bar) when the program is missing. */
-  async function commandFor(lang: Lang, root: string): Promise<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv; detail: string }> {
-    if (lang === 'python') {
-      const entry = (await setting('pyrightPath', '')) || pyrightEntry() || await (host.installPyright ? host.installPyright() : installPyright(pyrightPrefix(), findNode(), host.log))
-      if (!entry) throw new Error(`basedpyright/Pyright not found on this ${process.platform} machine. Install it (needs Node.js 18+ with npm): npm i --prefix ${WIN ? '"%LOCALAPPDATA%\\orca-qt-lsp"' : '~/.local/share/orca-qt-lsp'} basedpyright@1.40.2`)
-      const node = (await setting('nodePath', '')) || findNode()
-      return { cmd: node, args: [entry, '--stdio'], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, detail: entry.includes('basedpyright') ? 'basedpyright' : 'pyright' }
-    }
-    if (lang === 'qml') {
-      const qmlls = findQmlls(await setting('qmllsPath', ''), await setting('qtBin', ''))
-      if (!qmlls) throw new Error('qmlls (Qt 6.4+) not found. Set "qmlls path" or "Qt bin folder" in the plugin Settings.')
-      const args: string[] = []
-      const builds = findBuildDirs(root, 'qml')
-      for (const b of builds.slice(0, 1)) args.push('-b', b)
-      // Qt's QML module folder next to qmlls (when qmlls lives outside the kit's bin)
-      const qmlDir = join(dirname(dirname(qmlls)), 'qml')
-      if (existsSync(qmlDir)) args.push('-I', qmlDir)
-      return { cmd: qmlls, args, detail: builds[0] ? `build: ${builds[0].slice(root.length + 1) || '.'}` : 'no build folder yet (run CMake configure so qmlls can see the project modules)' }
-    }
-    const clangd = findClangd(await setting('clangdPath', ''))
-    if (!clangd) throw new Error('clangd not found. Install LLVM or Qt Creator, or set "clangd path" in Settings.')
-    const args = ['--background-index', '--clang-tidy=false', '--header-insertion=never', '--completion-style=detailed', '--log=error', '--pch-storage=memory']
-    const cc = findBuildDirs(root, 'compile_commands')
-    if (cc[0]) args.push(`--compile-commands-dir=${cc[0]}`)
-    // clangd runs the compiler named in compile_commands.json to read its system include paths. Allow only
-    // compilers from toolchain install folders, never one inside the opened project (a cloned repo could
-    // point compile_commands.json at its own "compiler").
-    const drivers = WIN
-      ? ['C:/Qt/Tools/**/bin/*.exe', 'C:/Program Files/LLVM/bin/*.exe', 'C:/Program Files/Microsoft Visual Studio/**/bin/**/cl.exe',
-          'C:/Program Files (x86)/Microsoft Visual Studio/**/bin/**/cl.exe', 'C:/msys64/*/bin/*.exe', 'C:/mingw*/bin/*.exe']
-      : ['/usr/bin/*', '/usr/local/bin/*', '/opt/homebrew/bin/*', '/opt/homebrew/opt/llvm/bin/*', '/Library/Developer/CommandLineTools/usr/bin/*',
-          '/Applications/Xcode*.app/Contents/Developer/Toolchains/**/bin/*', `${homedir()}/Qt/Tools/**/bin/*`]
-    const extra = String(await setting('compilerGlobs', '')).split(/[;,\n]/).map((x) => x.trim()).filter(Boolean)
-    args.push(`--query-driver=${[...drivers, ...extra].join(',')}`)
-    return { cmd: clangd, args, detail: cc[0] ? `compile_commands: ${cc[0].slice(root.length + 1) || '.'}` : 'no compile_commands.json yet (run CMake configure with CMAKE_EXPORT_COMPILE_COMMANDS=ON)' }
-  }
-
   // ---------- Server ----------
   async function serverFor(lang: Lang, root: string, file?: string): Promise<Server> {
     const existing = servers.get(key(lang, root))
-    if (existing && !existing.client.exited) return existing
-    const { cmd, args, env, detail } = await commandFor(lang, root)
+    if (existing && !existing.client.exited) { await existing.ready; return existing }
+    const id = key(lang, root)
+    const pending = starting.get(id)
+    if (pending) return pending
+    const startup = startServer(lang, root, file)
+    starting.set(id, startup)
+    try { return await startup } finally { if (starting.get(id) === startup) starting.delete(id) }
+  }
+  async function startServer(lang: Lang, root: string, file?: string): Promise<Server> {
+    const { cmd, args, env, detail } = await serverCommand(lang, root, { setting, pluginDir, log: host.log, installPyright: host.installPyright })
     host.log(`spawn ${lang}: ${cmd} ${args.join(' ')} (root ${root})`)
-    const client = new LspClient(cmd, args, lang === 'python' ? pluginDir() : root, env)
+    const client = new LspClient(cmd, args, lang === 'python' ? pluginDir() : root, env, { fileCancellation: lang === 'python' })
     client.log = (l) => host.log(`[${lang}] ${l}`)
-    const srv: Server = { lang, root, client, ready: Promise.resolve(), open: new Map(), diagnostics: new Map(), legend: null, interpreter: null, detail }
+    const srv: Server = { lang, root, client, ready: Promise.resolve(), open: new Map(), diagnostics: new Map(), legend: null, interpreter: null, detail, capabilities: {} }
     client.onExit = (code) => { host.log(`${lang} server exited (${code}) for ${root}`); if (servers.get(key(lang, root)) === srv) servers.delete(key(lang, root)) }
 
     const typeMode = String(await setting('typeCheckingMode', 'off')).trim() || 'off'
@@ -223,11 +192,18 @@ export function createCore(host: CoreEnv): Core {
       params.items.map((it) => {
         if (lang !== 'python') return {}
         const py = srv.interpreter?.path
-        if (it.section === 'python') return py ? { pythonPath: py, defaultInterpreterPath: py } : {}
-        if (it.section === 'python.analysis' || it.section === 'basedpyright.analysis') {
-          // Default 'off' like VS Code's Pylance: only syntax/import errors, no type checking.
-          return { typeCheckingMode: typeMode, diagnosticMode: 'openFilesOnly', autoSearchPaths: true, useLibraryCodeForTypes: true, autoImportCompletions: true }
-        }
+        // basedpyright 1.40 requests the root section and reads `.analysis` itself.
+        // Returning only `basedpyright.analysis` silently leaves its default at
+        // "recommended", producing Unknown/unused/type errors even with off set.
+        const analysis = { typeCheckingMode: typeMode, diagnosticMode: 'openFilesOnly', autoSearchPaths: true, useLibraryCodeForTypes: true, autoImportCompletions: true,
+          // Large Qt/Python repositories often keep packaged apps and additional
+          // checkouts here. Explicit imports still resolve; avoid enumerating them
+          // for workspace indexing before an interactive request can be answered.
+          exclude: ['**/node_modules/**', '**/__pycache__/**', '**/.git/**', '**/.worktrees/**', '**/.venv/**', '**/venv/**', '**/build/**', '**/dist/**', '**/out/**'],
+          ...(typeMode === 'off' ? { diagnosticSeverityOverrides: { reportMissingImports: 'error' } } : {}) }
+        if (it.section === 'python') return { ...(py ? { pythonPath: py, defaultInterpreterPath: py } : {}), analysis }
+        if (it.section === 'basedpyright' || it.section === 'pyright') return { analysis }
+        if (it.section === 'python.analysis' || it.section === 'basedpyright.analysis') return analysis
         return {}
       }))
     client.onRequest('window/workDoneProgress/create', () => null)
@@ -240,11 +216,17 @@ export function createCore(host: CoreEnv): Core {
       try { path = fileURLToPath(p.uri) } catch { return }
       const out: DiagnosticsOutput = {
         version: p.version ?? -1,
-        items: p.diagnostics.map((d) => ({ range: d.range, severity: d.severity ?? 1, message: d.message, source: d.source ?? SERVER_LABEL[lang], code: typeof d.code === 'object' ? d.code?.value : d.code }))
+        items: p.diagnostics.filter((d) => {
+          const code = typeof d.code === 'object' ? d.code?.value : d.code
+          // "off" is the quiet editor mode: syntax + missing imports. Also hide
+          // server hint diagnostics and project-config overrides in this mode.
+          return lang !== 'python' || typeMode !== 'off' || code == null || code === 'reportMissingImports'
+        }).map((d) => ({ range: d.range, severity: d.severity ?? 1, message: d.message, source: d.source ?? SERVER_LABEL[lang], code: typeof d.code === 'object' ? d.code?.value : d.code }))
       }
       srv.diagnostics.set(norm(path), out)
       // Posted messages are limited to 256 KiB: push at most 300 diagnostics, each message cut to 500 chars
-      host.post('lsp.diagnostics', { path, version: out.version, items: out.items.slice(0, 300).map((d) => ({ ...d, message: String(d.message).slice(0, 500) })) })
+      const envelope = (items: DiagnosticsOutput['items']) => ({ path, version: out.version, items })
+      host.post('lsp.diagnostics', JSON.parse(JSON.stringify(envelope(limitItems(out.items.slice(0, 300).map((d) => ({ ...d, message: String(d.message).slice(0, 500) })), envelope, POST_BUDGET)))))
     })
     const rootUri = pathToFileURL(root).href
     srv.ready = client.request('initialize', {
@@ -259,7 +241,12 @@ export function createCore(host: CoreEnv): Core {
           definition: { linkSupport: false },
           declaration: { linkSupport: false },
           hover: { contentFormat: ['markdown', 'plaintext'] },
-          completion: { completionItem: { snippetSupport: false, documentationFormat: ['markdown', 'plaintext'] }, contextSupport: true },
+          completion: { completionItem: { snippetSupport: true, documentationFormat: ['markdown', 'plaintext'] }, contextSupport: true },
+          references: {},
+          signatureHelp: { signatureInformation: { documentationFormat: ['markdown', 'plaintext'], parameterInformation: { labelOffsetSupport: true }, activeParameterSupport: true }, contextSupport: true },
+          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+          documentHighlight: {},
+          rename: { prepareSupport: true },
           publishDiagnostics: { versionSupport: true },
           semanticTokens: { requests: { full: true, range: false }, tokenTypes: [], tokenModifiers: [], formats: ['relative'], multilineTokenSupport: false, overlappingTokenSupport: false }
         },
@@ -267,13 +254,18 @@ export function createCore(host: CoreEnv): Core {
       },
       initializationOptions: lang === 'cpp' ? { clangdFileStatus: false } : {}
     }, 60000).then((init: any) => {
+      srv.capabilities = init?.capabilities ?? {}
       const legend = init?.capabilities?.semanticTokensProvider?.legend
       if (legend?.tokenTypes) srv.legend = { tokenTypes: legend.tokenTypes, tokenModifiers: legend.tokenModifiers ?? [] }
       client.notify('initialized', {})
       if (lang === 'python') client.notify('workspace/didChangeConfiguration', { settings: {} })
     })
     servers.set(key(lang, root), srv)
-    await srv.ready
+    try { await srv.ready } catch (e) {
+      if (servers.get(key(lang, root)) === srv) servers.delete(key(lang, root))
+      srv.client.kill()
+      throw e
+    }
     host.log(`${lang} ready for ${root} (${detail})`)
     return srv
   }
@@ -381,7 +373,7 @@ export function createCore(host: CoreEnv): Core {
     }
   })
 
-  // Worker-side copy of each open file: the editor sends only changes (the plugin channel is limited to ~1 MiB per message).
+  // Worker-side copy of each open file: frame inputs are limited to 64 KiB.
   const docs = new Map<string, string>()
   const sendFull = (srv: Server, path: string, text: string, version: number) => {
     if (srv.open.has(norm(path))) srv.client.notify('textDocument/didChange', { textDocument: { uri: uriOf(path), version }, contentChanges: [{ text }] })
@@ -415,7 +407,7 @@ export function createCore(host: CoreEnv): Core {
     return { ok: true }
   })
 
-  /** Send the full content in chunks (large files): begin -> part... -> commit. Each chunk < 512 KB. */
+  /** Upload large files through the 64 KiB input lane, committing only the final chunk. */
   const uploads = new Map<string, string[]>()
   handle('lsp.upload', async ({ path, version, part, index, total }: { path: string; version: number; part: string; index: number; total: number }) => {
     const k = norm(path)
@@ -430,6 +422,8 @@ export function createCore(host: CoreEnv): Core {
   })
 
   handle('lsp.close', async ({ path }: { path: string }) => {
+    docs.delete(norm(path))
+    uploads.delete(norm(path))
     const lang = langOfPath(path)
     const srv = lang ? serverOf(lang, path) : null
     if (srv?.open.delete(norm(path))) srv.client.notify('textDocument/didClose', { textDocument: { uri: uriOf(path) } })
@@ -438,6 +432,7 @@ export function createCore(host: CoreEnv): Core {
   })
 
   function stopServer(srv: Server) {
+    starting.delete(key(srv.lang, srv.root))
     servers.delete(key(srv.lang, srv.root))
     hashIndex.delete(srv.root)
     void srv.client.request('shutdown', null, 3000).catch(() => {}).finally(() => { srv.client.notify('exit', null); setTimeout(() => srv.client.kill(), 500) })
@@ -449,33 +444,143 @@ export function createCore(host: CoreEnv): Core {
   const LIB_RE = /[\\/](site-packages|\.venv|venv|env|node_modules|typeshed-fallback|include|Qt[\\/]\d|mingw\d*_64|qml[\\/]Qt|QtQuick)[\\/]/i
   const isLibPath = (p: string, root: string) => !norm(p).startsWith(norm(root) + sep) || LIB_RE.test(p.slice(root.length)) || /[\\/](build|out|cmake-build-[^\\/]*)[\\/]/i.test(p.slice(root.length))
 
-  handle('lsp.hover', async ({ path, position }: PosInput): Promise<HoverOutput> => {
+  const interactiveRequests = new Map<string, AbortController>()
+  async function interactive<T>(input: PosInput, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController()
+    const id = input.requestId ? `${norm(input.path)}|${input.requestId}` : null
+    if (id) interactiveRequests.set(id, controller)
+    try { return await run(controller.signal) }
+    finally { if (id && interactiveRequests.get(id) === controller) interactiveRequests.delete(id) }
+  }
+  handle('lsp.cancel', async ({ path, requestId }: { path: string; requestId: string }) => {
+    interactiveRequests.get(`${norm(path)}|${requestId}`)?.abort()
+    return { ok: true }
+  })
+  handle('lsp.hover', (input: PosInput): Promise<HoverOutput> => interactive(input, async (signal) => {
+    const { path, position } = input
     const srv = await serverForPath(path)
-    const r: any = await srv.client.request('textDocument/hover', { textDocument: { uri: uriOf(path) }, position })
+    const r: any = await srv.client.request('textDocument/hover', { textDocument: { uri: uriOf(path) }, position }, 15000, signal)
     if (!r) return { markdown: null, range: null }
     const c = r.contents
     const md = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x: any) => (typeof x === 'string' ? x : '```' + (x.language ?? '') + '\n' + x.value + '\n```')).join('\n\n') : c?.kind === 'plaintext' ? '```\n' + c.value + '\n```' : c?.value ?? null
     return JSON.parse(JSON.stringify({ markdown: md ?? null, range: r.range ?? null }))
-  })
+  }))
 
   /** Files the language server pointed at (go to definition): the only ones lsp.peek may read. */
   const peekable = new Set<string>()
-  handle('lsp.definition', async ({ path, position }: PosInput): Promise<DefinitionOutput> => {
-    const srv = await serverForPath(path)
-    let r: any = await srv.client.request('textDocument/definition', { textDocument: { uri: uriOf(path) }, position })
-    // clangd: on a declaration (header) definition points to itself -> try declaration to jump between .h/.cpp
-    if ((!r || (Array.isArray(r) && !r.length)) && srv.lang === 'cpp') r = await srv.client.request('textDocument/declaration', { textDocument: { uri: uriOf(path) }, position }).catch(() => null)
-    const list = r ? (Array.isArray(r) ? r : [r]) : []
+  async function locationsOf(list: any[], srv: Server): Promise<Loc[]> {
     const wsRoots = [...(await host.roots().catch(() => ({ roots: [] as string[] }))).roots, srv.root].map((x) => resolve(x))
     const locations: Loc[] = []
     for (const l of list) {
-      const u = l.uri ?? l.targetUri
       let p: string
-      try { p = fileURLToPath(u) } catch { continue }
+      try { p = fileURLToPath(l.uri ?? l.targetUri) } catch { continue }
+      const range = l.targetSelectionRange ?? l.range ?? l.targetRange
+      if (!range?.start || !range?.end) continue
       peekable.add(norm(p))
-      locations.push({ path: p, range: l.targetSelectionRange ?? l.range ?? l.targetRange, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r) => norm(p).startsWith(norm(r) + sep)) })
+      locations.push({ path: p, range, inWorkspace: !isLibPath(p, srv.root), openable: wsRoots.some((r) => norm(p).startsWith(norm(r) + sep)) })
     }
+    return limitItems(locations, (locations) => ({ locations, truncated: true }))
+  }
+  handle('lsp.definition', (input: PosInput): Promise<DefinitionOutput> => interactive(input, async (signal) => {
+    const { path, position } = input
+    const srv = await serverForPath(path)
+    let r: any = await srv.client.request('textDocument/definition', { textDocument: { uri: uriOf(path) }, position }, 15000, signal)
+    // clangd: on a declaration (header) definition points to itself -> try declaration to jump between .h/.cpp
+    if ((!r || (Array.isArray(r) && !r.length)) && srv.lang === 'cpp') r = await srv.client.request('textDocument/declaration', { textDocument: { uri: uriOf(path) }, position }).catch(() => null)
+    const list = r ? (Array.isArray(r) ? r : [r]) : []
+    const locations = await locationsOf(list, srv)
+    if (input.intent === 'click') host.log(`[navigation] click ${path}:${position.line + 1}:${position.character + 1} -> ${locations.length} definitions`)
     return JSON.parse(JSON.stringify({ locations }))
+  }))
+
+  handle('lsp.references', async ({ path, position, includeDeclaration = true }: PosInput & { includeDeclaration?: boolean }): Promise<ReferencesOutput> => {
+    const srv = await serverForPath(path)
+    if (!srv.capabilities.referencesProvider) return { locations: [] }
+    const r = await srv.client.request<any[]>('textDocument/references', { textDocument: { uri: uriOf(path) }, position, context: { includeDeclaration } })
+    const locations = await locationsOf(r ?? [], srv)
+    return { locations, truncated: locations.length < (r?.length ?? 0) }
+  })
+
+  const markdown = (v: any): string | undefined => (typeof v === 'string' ? v : v?.value)?.slice(0, 8000)
+  handle('lsp.signatureHelp', async ({ path, position, trigger }: PosInput & { trigger?: string }): Promise<SignatureHelpOutput> => {
+    const srv = await serverForPath(path)
+    const empty: SignatureHelpOutput = { signatures: [], activeSignature: 0, activeParameter: 0 }
+    if (!srv.capabilities.signatureHelpProvider) return empty
+    const r = await srv.client.request<any>('textDocument/signatureHelp', { textDocument: { uri: uriOf(path) }, position,
+      context: { triggerKind: trigger ? 2 : 1, triggerCharacter: trigger, isRetrigger: false } })
+    if (!r) return empty
+    const signatures = (r.signatures ?? []).slice(0, 50).map((s: any) => ({ label: String(s.label).slice(0, 16000), documentation: markdown(s.documentation),
+      activeParameter: s.activeParameter, parameters: (s.parameters ?? []).map((p: any) => ({ label: p.label, documentation: markdown(p.documentation) })) }))
+    return { ...empty, signatures: limitItems(signatures, (signatures) => ({ ...empty, signatures })), activeSignature: r.activeSignature ?? 0, activeParameter: r.activeParameter ?? 0 }
+  })
+
+  handle('lsp.documentSymbols', async ({ path }: { path: string }): Promise<DocumentSymbolsOutput> => {
+    const srv = await serverForPath(path)
+    if (!srv.capabilities.documentSymbolProvider) return { items: [] }
+    const raw = await srv.client.request<any[]>('textDocument/documentSymbol', { textDocument: { uri: uriOf(path) } })
+    const items: DocumentSymbol[] = []
+    const visit = (list: any[], parent = '', depth = 0) => {
+      if (depth > 100) return
+      for (const s of list) {
+        if (items.length >= 10000) return
+        const range = s.range ?? s.location?.range
+        if (!range) continue
+        items.push({ name: String(s.name), detail: s.detail ?? '', kind: s.kind, range, selectionRange: s.selectionRange ?? range, containerName: s.containerName ?? parent, tags: s.tags })
+        if (s.children) visit(s.children, s.name, depth + 1)
+      }
+    }
+    visit(raw ?? [])
+    const capped = limitItems(items, (items) => ({ items, truncated: true }))
+    return { items: capped, truncated: capped.length < items.length }
+  })
+
+  handle('lsp.documentHighlights', async ({ path, position }: PosInput): Promise<DocumentHighlightsOutput> => {
+    const srv = await serverForPath(path)
+    if (!srv.capabilities.documentHighlightProvider) return { items: [] }
+    const r = await srv.client.request<any[]>('textDocument/documentHighlight', { textDocument: { uri: uriOf(path) }, position })
+    return { items: limitItems((r ?? []).map((h) => ({ range: h.range, kind: h.kind ?? 1 })), (items) => ({ items })) }
+  })
+
+  handle('lsp.prepareRename', async ({ path, position }: PosInput): Promise<PrepareRenameOutput> => {
+    const srv = await serverForPath(path)
+    if (!srv.capabilities.renameProvider) return { rejectReason: 'This language server does not support rename.' }
+    if (!srv.capabilities.renameProvider.prepareProvider) return {}
+    const r = await srv.client.request<any>('textDocument/prepareRename', { textDocument: { uri: uriOf(path) }, position })
+    if (!r) return { rejectReason: 'This symbol cannot be renamed.' }
+    if (r.defaultBehavior) return {}
+    const range = r.range ?? r
+    const line = docs.get(norm(path))?.split(/\r?\n/)[range.start.line]
+    return { range, placeholder: r.placeholder ?? (range.start.line === range.end.line ? line?.slice(range.start.character, range.end.character) : undefined) }
+  })
+
+  handle('lsp.rename', async ({ path, position, newName, version }: PosInput & { newName: string; version: number }): Promise<RenameOutput> => {
+    const srv = await serverForPath(path)
+    const reject = (rejectReason: string): RenameOutput => ({ edits: [], rejectReason })
+    if (!srv.capabilities.renameProvider) return reject('This language server does not support rename.')
+    if (!newName?.trim()) return reject('Enter a non-empty name.')
+    if (srv.open.get(norm(path)) !== version) return reject('The document changed. Try rename again.')
+    const r = await srv.client.request<any>('textDocument/rename', { textDocument: { uri: uriOf(path) }, position, newName })
+    if (srv.open.get(norm(path)) !== version) return reject('The document changed. Try rename again.')
+    if (!r) return reject('This symbol cannot be renamed.')
+    const edits: SourceEdit[] = []
+    const add = (uri: string, changes: any[]) => {
+      let target: string
+      try { target = fileURLToPath(uri) } catch { return false }
+      if (norm(resolve(target)) !== norm(resolve(path))) return false
+      for (const e of changes) {
+        if (!e.range || typeof e.newText !== 'string') return false
+        edits.push({ range: e.range, text: e.newText })
+      }
+      return true
+    }
+    for (const [uri, changes] of Object.entries(r.changes ?? {})) if (!add(uri, changes as any[])) return reject('Rename also changes other files. Cross-file rename is not available yet; no changes were applied.')
+    for (const change of r.documentChanges ?? []) {
+      if (!change.textDocument || !Array.isArray(change.edits)) return reject('Rename requires file operations; no changes were applied.')
+      if (change.textDocument.version != null && change.textDocument.version !== version) return reject('The document changed. Try rename again.')
+      if (!add(change.textDocument.uri, change.edits)) return reject('Rename also changes other files. Cross-file rename is not available yet; no changes were applied.')
+    }
+    if (messageBytes({ edits }) > RESPONSE_BUDGET) return reject('This rename is too large; no changes were applied.')
+    return { edits }
   })
 
   handle('lsp.completion', async ({ path, position, trigger }: PosInput & { trigger?: string }): Promise<CompletionOutput> => {
@@ -492,16 +597,21 @@ export function createCore(host: CoreEnv): Core {
       if (it.textEdit?.range ?? it.textEdit?.replace) out.range = it.textEdit.range ?? it.textEdit.replace
       if (it.sortText) out.sortText = String(it.sortText)
       if (it.filterText) out.filterText = String(it.filterText)
+      if (it.insertTextFormat === 2) out.snippet = true
+      if (it.additionalTextEdits?.length) out.additionalTextEdits = it.additionalTextEdits.map((e: any) => ({ range: e.range, text: e.newText }))
       return out
     })
-    return JSON.parse(JSON.stringify({ items, incomplete: Array.isArray(r) ? false : !!r?.isIncomplete }))
+    const capped = limitItems(items, (items) => ({ items, incomplete: true }))
+    return JSON.parse(JSON.stringify({ items: capped, incomplete: capped.length < items.length || (Array.isArray(r) ? false : !!r?.isIncomplete) }))
   })
 
   handle('lsp.diagnostics', async ({ path }: { path: string }) => {
     const lang = langOfPath(path)
     const srv = lang ? serverOf(lang, path) : null
     const d = srv?.diagnostics.get(norm(path))
-    return d ? { version: d.version, items: d.items.slice(0, 2000).map((x) => ({ ...x, message: String(x.message).slice(0, 500) })) } : { version: -1, items: [] }
+    if (!d) return { version: -1, items: [] }
+    const envelope = (items: DiagnosticsOutput['items']) => ({ version: d.version, items })
+    return envelope(limitItems(d.items.slice(0, 2000).map((x) => ({ ...x, message: String(x.message).slice(0, 500) })), envelope))
   })
 
   handle('lsp.serverInfo', async ({ path }: { path: string }) => {
@@ -544,7 +654,9 @@ export function createCore(host: CoreEnv): Core {
     const r: any = await srv.client.request('textDocument/semanticTokens/full', { textDocument: { uri: uriOf(path) } }, 20000).catch(() => null)
     const data: number[] = Array.isArray(r?.data) ? r.data : []
     // ~1 MiB message limit: ~30k tokens (150k numbers, each <= 7 JSON chars) is enough for normal sources; generated files (resources_rc.py) lose the tail.
-    return { legend: srv.legend, data: data.length > 150_000 ? data.slice(0, 150_000) : data }
+    const groups: number[][] = []
+    for (let i = 0; i + 4 < data.length && i < 150_000; i += 5) groups.push(data.slice(i, i + 5))
+    return { legend: srv.legend, data: limitItems(groups, (groups) => ({ legend: srv.legend, data: groups.flat() })).flat() }
   })
 
   /** Read-only content of a target file for peek / navigation. Source/stub/header files only. */
@@ -556,8 +668,9 @@ export function createCore(host: CoreEnv): Core {
     // around `line`, with lines outside it left empty (line numbers stay correct so peek jumps to the right place).
     const LIMIT = 300_000
     let text: string
-    try { text = readFileSync(path, 'utf8') } catch { return { text: '', lang } }
-    if (text.length <= LIMIT) return { text, lang }
+    const live = serverOf(lang, path)?.open.has(norm(path))
+    try { text = (live ? docs.get(norm(path)) : undefined) ?? readFileSync(path, 'utf8') } catch { return { text: '', lang } }
+    if (jsonBytes({ text, lang }) <= RESPONSE_BUDGET) return { text, lang }
     const lines = text.split('\n')
     const at = Math.max(0, Math.min(lines.length - 1, line ?? 0))
     let from = at, to = at, size = lines[at].length
@@ -565,11 +678,21 @@ export function createCore(host: CoreEnv): Core {
       if (to < lines.length - 1) { to++; size += lines[to].length + 1 }
       if (from > 0 && size < LIMIT - lines.length) { from--; size += lines[from].length + 1 }
     }
-    return { text: lines.map((l, i) => (i >= from && i <= to ? l : '')).join('\n'), lang, window: [from, to] }
+    let windowText = lines.map((l, i) => (i >= from && i <= to ? l : '')).join('\n')
+    while (jsonBytes({ text: windowText, lang, window: [from, to] }) > RESPONSE_BUDGET && from < to) {
+      if (at - from > to - at) from++; else to--
+      windowText = lines.map((l, i) => (i >= from && i <= to ? l : '')).join('\n')
+    }
+    if (jsonBytes({ text: windowText, lang, window: [from, to] }) > RESPONSE_BUDGET) return { text: '', lang, truncated: true }
+    return { text: windowText, lang, window: [from, to] }
   })
 
   /** Open the definition in an Orca tab (file inside a workspace); outside a workspace the editor shows a peek. */
-  handle('lsp.reveal', async ({ path, line }: { path: string; line: number }) => host.reveal ? host.reveal(path, line) : { opened: false, reason: 'no-host' })
+  handle('lsp.reveal', async ({ path, line }: { path: string; line: number }) => {
+    const result = host.reveal ? await host.reveal(path, line) : { opened: false, reason: 'no-host' }
+    host.log(`[navigation] reveal ${path}:${line} opened=${result.opened}${result.reason ? ` reason=${result.reason}` : ''}`)
+    return result
+  })
 
   return { handlers, workspaceRemoved, shutdown: () => { for (const s of [...servers.values()]) stopServer(s) } }
 }

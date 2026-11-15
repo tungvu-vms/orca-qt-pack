@@ -3,7 +3,8 @@
 // Usage: node tools/build-catalog.mjs --url <https-or-ssh-git-url> --owner <org-or-user> [--ref main]
 // Commit plugin changes FIRST, then run this script, then commit orca-catalog.json.
 import { execFileSync } from 'node:child_process'
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { retainedEntry } from './catalog-policy.mjs'
 import { join, resolve } from 'node:path'
 
 const arg = (name, fallback) => {
@@ -29,9 +30,16 @@ if (run('git', ['status', '--porcelain', '--', 'plugins']).trim()) {
 
 const CATEGORIES = { data: ['languages'], 'trusted-worker': ['commands-panels'] }
 const plugins = []
+const previous = existsSync(join(root, 'orca-catalog.json')) ? JSON.parse(readFileSync(join(root, 'orca-catalog.json'), 'utf8')).plugins : []
 for (const dir of readdirSync(join(root, 'plugins'), { withFileTypes: true }).filter((d) => d.isDirectory())) {
   const sourcePath = `plugins/${dir.name}`
   const manifest = JSON.parse(readFileSync(join(root, sourcePath, 'orca-plugin.json'), 'utf8'))
+  const retained = retainedEntry(previous.find(p => p.id === `${owner}.${manifest.id}`), manifest)
+  if (retained) {
+    plugins.push(retained)
+    console.log(`${retained.id} ${manifest.version}: retained published commit/hash (bump version to release changes)`)
+    continue
+  }
   const out = JSON.parse(run(orca, ['plugin', 'release-entry', sourcePath, '--json']))
   if (!out.ok) throw new Error(`${sourcePath}: ${out.error?.message}`)
   const entry = out.result.entry

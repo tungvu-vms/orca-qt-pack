@@ -8,7 +8,7 @@
   "description": "VS Code-style editor views for Qt developers: Ctrl+Click / F12 to go to definition, hover, completion, diagnostics and semantic colors for Python (basedpyright, auto-selects the project's interpreter), QML (qmlls) and C/C++ (clangd). Works on files of other machines too, over SSH.",
   "license": "MIT",
   "author": {
-    "name": "GPS Tech Vietnam"
+    "name": "Tùng Vũ"
   },
   "engines": {
     "orca": ">=1.4.248"
@@ -30,7 +30,7 @@
           ".pyw"
         ],
         "entry": "editor/python.html",
-        "priority": "option",
+        "priority": "default",
         "contentKind": "text",
         "frame": "isolated"
       },
@@ -41,7 +41,7 @@
           ".qml"
         ],
         "entry": "editor/qml.html",
-        "priority": "option",
+        "priority": "default",
         "contentKind": "text",
         "frame": "isolated"
       },
@@ -61,7 +61,7 @@
           ".ipp"
         ],
         "entry": "editor/cpp.html",
-        "priority": "option",
+        "priority": "default",
         "contentKind": "text",
         "frame": "isolated"
       }
@@ -80,6 +80,13 @@
         "description": "How strictly Pyright checks types: off (default, like VS Code's Pylance: only syntax and unresolved imports), basic, standard, strict. Takes effect after restarting the language server.",
         "type": "string",
         "default": "off"
+      },
+      {
+        "key": "pythonDiagnostics",
+        "title": "Show Python diagnostics",
+        "description": "Show Python error underlines and diagnostic messages. Turn off for a quiet editor while keeping completion, hover and navigation. Also available in the editor's F1 menu as Python: Toggle Diagnostics.",
+        "type": "boolean",
+        "default": true
       },
       {
         "key": "projectEnvironments",

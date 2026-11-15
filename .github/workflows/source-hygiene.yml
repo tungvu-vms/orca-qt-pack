@@ -1,0 +1,30 @@
+name: Source hygiene
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run check:repo
+      - run: npx tsc -p plugins/qt-tools
+      - run: npm run test:syntax
+      - name: Scan Git history for secrets
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'gitleaks.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'gitleaks'
+          Invoke-WebRequest 'https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_x64.zip' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'd29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e') { throw 'Gitleaks checksum mismatch' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          & (Join-Path $destination 'gitleaks.exe') git . --log-opts=--all --redact=100 --no-banner
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
