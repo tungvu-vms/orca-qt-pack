@@ -158,6 +158,7 @@ const server = createServer(async (req, res) => {
       return
     }
     if (req.url.startsWith('/api/')) {
+      req.setEncoding('utf8')
       let body = ''
       for await (const chunk of req) body += chunk
       const { name, input } = JSON.parse(body)

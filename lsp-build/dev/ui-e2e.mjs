@@ -96,6 +96,7 @@ window.orca = { document: {session: async () => window.__session}, on() { return
 const server = createServer(async (req, res) => {
   try {
     if (req.url === '/api') {
+      req.setEncoding('utf8')
       let body = ''; for await (const chunk of req) body += chunk
       const { name, input } = JSON.parse(body)
       const record = { name, input }; calls.push(record)
@@ -136,6 +137,20 @@ const server = createServer(async (req, res) => {
 let browser, page
 try {
   await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  // Force a real HTTP chunk boundary inside an emoji, without relying on TCP timing.
+  const unicode = 'Tiếng Việt 漢字 😀'
+  const bytes = Buffer.from(JSON.stringify({ name: 'lsp.hostChoice', input: { unicode } }))
+  const split = bytes.indexOf(Buffer.from('😀')) + 1
+  const prefixRead = new Promise((done) => server.prependOnceListener('request', (req) => req.once('data', done)))
+  const body = new ReadableStream({ async start(controller) {
+    controller.enqueue(bytes.subarray(0, split))
+    await prefixRead
+    controller.enqueue(bytes.subarray(split))
+    controller.close()
+  } })
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api`, { method: 'POST', body, duplex: 'half' })
+  await response.json()
+  assert.equal(calls.pop().input.unicode, unicode, 'the simulated bridge must preserve Unicode across HTTP chunks')
   const executablePath = process.env.QT_LSP_BROWSER ?? [
     'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
     'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/chromium', '/usr/bin/google-chrome',
@@ -403,6 +418,9 @@ try {
   await consumerRow.dblclick()
   for (let i = 0; i < 100 && reveals.length === beforeDeclarationClick; i++) await page.waitForTimeout(20)
   assert(reveals.slice(beforeDeclarationClick).some(r => r.path.toLowerCase() === consumerPath.toLowerCase() && r.line === 2), 'selecting a usage must open its file at the correct line')
+  // The reveal callback precedes its RPC reply and Monaco's focus restoration.
+  await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Opened '))
+  await page.locator('.peekview-widget').waitFor({ state: 'detached' })
   await page.keyboard.press('Escape')
   console.log('PASS declaration Ctrl+Click: lists importing/calling files and opens a selected usage')
 
